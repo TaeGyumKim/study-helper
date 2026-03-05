@@ -20,12 +20,12 @@ venv/
 dist/
 build/
 .uv/
-uv.lock
 
 # Node
 node_modules/
 *.lock
 !package-lock.json
+!uv.lock
 
 # macOS
 .DS_Store
