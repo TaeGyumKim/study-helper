@@ -16,7 +16,7 @@ from src.ui.login import (
     show_login_error,
     show_login_success,
 )
-from src.ui.courses import show_course_list, show_loading
+from src.ui.courses import show_course_list, show_loading, show_week_list
 
 console = Console()
 
@@ -82,9 +82,13 @@ async def run():
             console.print("\n  [dim]종료합니다.[/dim]\n")
             break
 
-        # 다음 Phase에서 강의 목록 화면으로 연결
-        console.print(f"\n  [cyan]{selected.long_name}[/cyan] 선택됨 — 강의 목록은 다음 업데이트에서 제공됩니다.\n")
-        input("  Enter를 눌러 돌아가기...")
+        idx = courses.index(selected)
+        detail = details[idx]
+        if detail is None:
+            console.print("\n  [red]강의 정보를 불러오지 못했습니다.[/red]\n")
+            continue
+
+        show_week_list(selected, detail)
 
     await scraper.close()
 

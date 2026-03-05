@@ -7,7 +7,7 @@ from rich.prompt import Prompt
 from rich.text import Text
 from rich import box
 
-from src.scraper.models import Course, CourseDetail
+from src.scraper.models import Course, CourseDetail, Week
 
 console = Console()
 
@@ -70,3 +70,67 @@ def show_course_list(courses: List[Course], details: List[Optional[CourseDetail]
         if choice.isdigit() and 1 <= int(choice) <= len(courses):
             return courses[int(choice) - 1]
         console.print("  [red]올바른 번호를 입력하세요.[/red]")
+
+
+def show_week_list(course: Course, detail: CourseDetail) -> None:
+    """
+    선택한 과목의 주차별 강의 목록을 표시한다.
+    Enter 입력 시 과목 목록으로 돌아간다.
+    """
+    console.clear()
+    console.print(Panel(
+        Text(course.long_name, justify="center", style="bold cyan"),
+        border_style="cyan",
+        padding=(0, 4),
+    ))
+    console.print()
+
+    video_weeks = [w for w in detail.weeks if w.video_lectures]
+    if not video_weeks:
+        console.print("  [dim]영상 강의가 없습니다.[/dim]")
+        console.print()
+        Prompt.ask("  [dim]Enter를 눌러 돌아가기[/dim]", default="")
+        return
+
+    for week in video_weeks:
+        pending = week.pending_count
+        total = len(week.video_lectures)
+
+        if pending == 0:
+            count_text = Text(f"  {pending} / {total}", style="green")
+        else:
+            count_text = Text(f"  {pending} / {total}", style="yellow bold")
+
+        header = Text()
+        header.append(f"  {week.title}", style="bold")
+        header.append("  ")
+        header.append("미시청 / 전체: ", style="dim")
+        header.append(count_text)
+
+        console.print(header)
+
+        table = Table(
+            box=box.SIMPLE,
+            show_header=False,
+            padding=(0, 2),
+            expand=False,
+        )
+        table.add_column("완료", width=3, justify="center")
+        table.add_column("강의명", min_width=30)
+        table.add_column("길이", width=8, justify="right", style="dim")
+
+        for lec in week.video_lectures:
+            if lec.completion == "completed":
+                done_mark = Text("✓", style="green")
+            elif lec.is_upcoming:
+                done_mark = Text("…", style="dim")
+            else:
+                done_mark = Text("○", style="yellow")
+
+            duration = lec.duration or "-"
+            table.add_row(done_mark, lec.title, duration)
+
+        console.print(table)
+
+    console.print()
+    Prompt.ask("  [dim]Enter를 눌러 돌아가기[/dim]", default="")
