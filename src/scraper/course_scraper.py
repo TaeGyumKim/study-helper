@@ -101,6 +101,11 @@ class CourseScraper:
 
         courses = []
         for item in raw:
+            # 학기 정보가 없는 비교과(안내 등) 과목 제외
+            term = item.get("term", "")
+            if not term:
+                continue
+
             long_name = item.get("longName", "")
             # LMS API가 "과목명 - 과목명" 형태로 중복 반환하는 경우 앞쪽만 사용
             if " - " in long_name:
@@ -111,7 +116,7 @@ class CourseScraper:
                 id=str(item["id"]),
                 long_name=long_name,
                 href=item.get("href", f"/courses/{item['id']}"),
-                term=item.get("term", ""),
+                term=term,
                 is_favorited=item.get("isFavorited", False),
             ))
         return courses
