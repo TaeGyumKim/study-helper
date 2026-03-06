@@ -15,8 +15,7 @@ console = Console()
 
 class LectureAction(Enum):
     PLAY = "play"
-    DOWNLOAD_VIDEO = "download_video"
-    DOWNLOAD_AUDIO = "download_audio"
+    DOWNLOAD = "download"
     CANCEL = "cancel"
 
 
@@ -195,6 +194,11 @@ def _render_week_list(course: Course, detail: CourseDetail) -> list[LectureItem]
 
 def _show_lecture_action_menu(lec: LectureItem) -> LectureAction:
     """선택한 강의에 대한 액션 메뉴를 표시하고 선택된 액션을 반환한다."""
+    from src.config import Config
+
+    rule = Config.DOWNLOAD_RULE or "both"
+    rule_label = {"video": "mp4", "audio": "mp3", "both": "mp4 + mp3"}.get(rule, rule)
+
     console.print()
     console.print(Panel(
         Text(lec.title, justify="center", style="bold"),
@@ -203,17 +207,14 @@ def _show_lecture_action_menu(lec: LectureItem) -> LectureAction:
     ))
     console.print()
     console.print("  [bold]1.[/bold] 재생  [dim](백그라운드 출석 처리)[/dim]")
-    console.print("  [bold]2.[/bold] 영상 다운로드  [dim](mp4)[/dim]")
-    console.print("  [bold]3.[/bold] 음성 다운로드  [dim](mp3)[/dim]")
-    console.print("  [bold]4.[/bold] 취소")
+    console.print(f"  [bold]2.[/bold] 다운로드  [dim]({rule_label})[/dim]")
+    console.print("  [bold]3.[/bold] 취소")
     console.print()
 
     while True:
-        choice = Prompt.ask("  선택", choices=["1", "2", "3", "4"], show_choices=False)
+        choice = Prompt.ask("  선택", choices=["1", "2", "3"], show_choices=False)
         if choice == "1":
             return LectureAction.PLAY
         if choice == "2":
-            return LectureAction.DOWNLOAD_VIDEO
-        if choice == "3":
-            return LectureAction.DOWNLOAD_AUDIO
+            return LectureAction.DOWNLOAD
         return LectureAction.CANCEL

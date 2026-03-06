@@ -18,7 +18,7 @@ from src.config import Config
 console = Console()
 
 
-async def run_download(page, lec, course, audio_only: bool = False) -> bool:
+async def run_download(page, lec, course, audio_only: bool = False, both: bool = False) -> bool:
     """
     강의 영상을 다운로드하고 진행률을 Progress bar로 표시한다.
 
@@ -27,6 +27,7 @@ async def run_download(page, lec, course, audio_only: bool = False) -> bool:
         lec:        다운로드할 LectureItem
         course:     과목 Course (파일명 생성에 사용)
         audio_only: True면 mp3로 변환 후 mp4 삭제
+        both:       True면 mp4 유지 + mp3도 추가 생성
 
     Returns:
         True: 정상 완료 / False: 오류
@@ -55,7 +56,12 @@ async def run_download(page, lec, course, audio_only: bool = False) -> bool:
     mp4_filename = make_filename(course.long_name, lec.title)
     mp4_path = Path(download_dir) / mp4_filename
 
-    final_path = mp4_path.with_suffix(".mp3") if audio_only else mp4_path
+    if audio_only:
+        final_path = mp4_path.with_suffix(".mp3")
+    elif both:
+        final_path = mp4_path  # mp4 + mp3 둘 다 저장
+    else:
+        final_path = mp4_path
     console.print(f"  [dim]저장 경로: {final_path}[/dim]")
     console.print()
 
@@ -81,19 +87,22 @@ async def run_download(page, lec, course, audio_only: bool = False) -> bool:
         console.print(f"  [bold red]다운로드 실패:[/bold red] {e}")
         return False
 
-    # 4. 음성 전용: mp4 → mp3 변환 후 mp4 삭제
-    if audio_only:
+    # 4. mp3 변환 (audio_only 또는 both)
+    if audio_only or both:
         console.print()
         console.print("  [dim]mp3 변환 중...[/dim]")
         try:
             mp3_path = convert_to_mp3(mp4_path)
-            mp4_path.unlink()  # 원본 mp4 삭제
+            if audio_only:
+                mp4_path.unlink()  # 음성 전용: 원본 mp4 삭제
         except Exception as e:
             console.print(f"  [bold red]mp3 변환 실패:[/bold red] {e}")
             return False
 
         console.print()
         console.print(f"  [bold green]다운로드 완료![/bold green]")
+        if both:
+            console.print(f"  [dim]{mp4_path}[/dim]")
         console.print(f"  [dim]{mp3_path}[/dim]")
         return True
 

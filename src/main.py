@@ -16,7 +16,7 @@ from src.ui.login import (
     show_login_error,
     show_login_success,
 )
-from src.ui.courses import LectureAction, show_course_list, show_loading, show_week_list
+from src.ui.courses import LectureAction, show_course_list, show_week_list
 from src.ui.player import run_player
 from src.ui.download import run_download
 from src.ui.settings import run_settings
@@ -103,11 +103,11 @@ async def run():
         if action == LectureAction.PLAY:
             await run_player(scraper._page, lec, debug=True)
             input("\n  Enter를 눌러 계속...")
-        elif action == LectureAction.DOWNLOAD_VIDEO:
-            await run_download(scraper._page, lec, selected, audio_only=False)
-            input("\n  Enter를 눌러 계속...")
-        elif action == LectureAction.DOWNLOAD_AUDIO:
-            await run_download(scraper._page, lec, selected, audio_only=True)
+        elif action == LectureAction.DOWNLOAD:
+            rule = Config.DOWNLOAD_RULE or "both"
+            audio_only = rule == "audio"
+            both = rule == "both"
+            await run_download(scraper._page, lec, selected, audio_only=audio_only, both=both)
             input("\n  Enter를 눌러 계속...")
 
     await scraper.close()
