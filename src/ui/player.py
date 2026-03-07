@@ -116,6 +116,7 @@ async def run_player(page, lec: LectureItem, debug: bool = False) -> bool:
             lecture_url=lec.full_url,
             on_progress=on_progress,
             debug=True,
+            fallback_duration=estimated_duration,
         )
     else:
         with Live(progress, console=console, refresh_per_second=4):
@@ -123,6 +124,7 @@ async def run_player(page, lec: LectureItem, debug: bool = False) -> bool:
                 page=page,
                 lecture_url=lec.full_url,
                 on_progress=on_progress,
+                fallback_duration=estimated_duration,
             )
 
     console.print()

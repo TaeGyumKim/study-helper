@@ -142,6 +142,34 @@ async def _ensure_playing(frame: Frame):
         pass
 
 
+async def _create_fake_webm(duration_sec: float) -> bytes:
+    """VP8 WebM 더미 영상 생성 (Chromium H.264 미지원 우회).
+
+    2×2 픽셀 검정 프레임, 1fps, 극소 용량.
+    Chromium headless는 H.264를 지원하지 않지만 VP8/WebM은 기본 지원한다.
+    commonscdn MP4 요청을 이 영상으로 교체하면 Plan A(video DOM 폴링)가 동작한다.
+    """
+    import os
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        output_path = os.path.join(tmpdir, "fake.webm")
+        proc = await asyncio.create_subprocess_exec(
+            "ffmpeg", "-y",
+            "-f", "lavfi", "-i", "color=black:s=2x2:r=1",
+            "-t", str(int(duration_sec) + 2),
+            "-c:v", "libvpx", "-b:v", "0", "-crf", "10", "-an",
+            output_path,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await proc.communicate()
+        if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
+            raise RuntimeError("ffmpeg 더미 영상 생성 실패")
+        with open(output_path, "rb") as f:
+            return f.read()
+
+
 # ── 진도 API 직접 호출 (Plan B) ──────────────────────────────────
 
 def _parse_player_url(player_url: str) -> dict:
@@ -171,19 +199,56 @@ def _parse_player_url(player_url: str) -> dict:
     }
 
 
+async def _call_progress_jsonp(frame: Frame, report_url: str, callback: str) -> str:
+    """
+    commons 프레임 내부에서 JSONP 스크립트 태그를 주입해 진도 API를 호출한다.
+
+    실제 플레이어(uni-player.min.js)와 동일하게 commons.ssu.ac.kr origin에서
+    canvas.ssu.ac.kr progress 엔드포인트를 호출함으로써 ErrAlreadyInView를 우회한다.
+    """
+    result = await frame.evaluate("""
+        (args) => new Promise((resolve) => {
+            var url = args[0];
+            var cbName = args[1];
+            window[cbName] = function(data) {
+                delete window[cbName];
+                resolve(JSON.stringify(data));
+            };
+            var s = document.createElement('script');
+            s.src = url;
+            s.onerror = function() {
+                delete window[cbName];
+                resolve(JSON.stringify({error: 'script_error'}));
+            };
+            document.head.appendChild(s);
+            setTimeout(function() {
+                delete window[cbName];
+                resolve(JSON.stringify({error: 'timeout'}));
+            }, 10000);
+        })
+    """, [report_url, callback])
+    return result
+
+
 async def _play_via_progress_api(
     page: Page,
     player_url: str,
     on_progress: Optional[Callable[[PlaybackState], None]],
     log: Callable,
+    fallback_duration: float = 0.0,
 ) -> PlaybackState:
     """
     headless에서 플레이어 로드에 실패할 때 사용하는 Plan B.
 
-    진도 API(TargetUrl)를 Playwright fetch로 주기적으로 호출해서
-    LMS가 수강 완료로 인식하도록 한다.
+    진도 API(TargetUrl)를 주기적으로 호출해서 LMS가 수강 완료로 인식하도록 한다.
 
-    API 호출 방식: GET/POST 모두 시도 (LMS 구현에 따라 다름).
+    ErrAlreadyInView 우회 전략:
+    - sl=1 파라미터로 commons.ssu.ac.kr에 뷰 세션이 등록된 상태에서
+      canvas.ssu.ac.kr 컨텍스트에서 직접 progress API를 호출하면 ErrAlreadyInView가 반환됨.
+    - commons 프레임(flashErrorPage.html)이 아직 살아있을 때,
+      그 프레임 내부에서 JSONP 스크립트 태그를 주입해 호출하면
+      실제 플레이어와 동일한 commons.ssu.ac.kr origin으로 요청이 전송되어 우회 가능.
+    - commons 프레임이 없으면 대시보드로 이동 후 page.request.get으로 폴백.
     """
     state = PlaybackState()
     info = _parse_player_url(player_url)
@@ -196,9 +261,33 @@ async def _play_via_progress_api(
         return state
 
     if duration <= 0:
-        log("  [API] duration 파싱 실패 — URL에 endat 파라미터 없음")
-        state.error = "영상 길이를 알 수 없습니다."
-        return state
+        if fallback_duration > 0:
+            log(f"  [API] endat 파라미터 없음 — LectureItem.duration 사용: {fallback_duration:.1f}s")
+            duration = fallback_duration
+        else:
+            log("  [API] duration 파싱 실패 — URL에 endat 파라미터 없음, fallback도 없음")
+            state.error = "영상 길이를 알 수 없습니다."
+            return state
+
+    # commons 프레임 탐색: flashErrorPage.html을 포함한 모든 commons.ssu.ac.kr 프레임
+    # _play_via_progress_api 호출 시점에는 아직 프레임이 살아있음
+    commons_frame: Optional[Frame] = None
+    for f in page.frames:
+        if "commons.ssu.ac.kr" in f.url:
+            commons_frame = f
+            break
+
+    if commons_frame:
+        log(f"  [API] commons 프레임 발견 ({commons_frame.url})")
+        log(f"  [API] JSONP 방식으로 진도 보고 (ErrAlreadyInView 우회)")
+    else:
+        # commons 프레임이 없으면 대시보드로 이동해 플레이어 세션 종료 시도
+        log("  [API] commons 프레임 없음 — 대시보드로 이동 후 직접 호출")
+        try:
+            await page.goto("https://canvas.ssu.ac.kr/", wait_until="networkidle", timeout=15000)
+            await asyncio.sleep(2)
+        except Exception as e:
+            log(f"  [API] 대시보드 이동 실패 (무시하고 계속): {e}")
 
     log(f"  [API] 진도 API 방식으로 재생 시뮬레이션")
     log(f"  [API] duration={duration:.1f}s  progress_url={progress_url}")
@@ -226,8 +315,6 @@ async def _play_via_progress_api(
                 ts = int(time.time() * 1000)
                 callback = f"jQuery111_{ts}"
 
-                # state=3: 재생 중 진도 보고 (완료 시 동일하게 사용)
-                # cumulativePage=100000000000000: 플레이어가 전체 시청 완료를 표현하는 방식
                 cumulative_page = total_page if current >= duration else int(current / duration * total_page)
                 page_num = min(cumulative_page, total_page)
 
@@ -245,12 +332,29 @@ async def _play_via_progress_api(
                     f"&_={ts}"
                 )
                 log(f"  [API] 진도 보고: {int(current)}s/{int(duration)}s")
-                response = await page.request.get(
-                    report_target,
-                    headers={"Referer": "https://commons.ssu.ac.kr/"},
-                )
-                body = await response.text()
-                log(f"  [API] 응답: {response.status}  body={body[:200]!r}")
+
+                if commons_frame:
+                    # commons 프레임 내부에서 JSONP 스크립트 태그 주입
+                    try:
+                        body = await _call_progress_jsonp(commons_frame, report_target, callback)
+                        log(f"  [API] 응답 (JSONP): {body[:200]!r}")
+                    except Exception as e:
+                        log(f"  [API] JSONP 오류 ({e}) — page.request.get으로 폴백")
+                        commons_frame = None
+                        # 폴백: page.request.get
+                        response = await page.request.get(
+                            report_target,
+                            headers={"Referer": "https://commons.ssu.ac.kr/"},
+                        )
+                        body = await response.text()
+                        log(f"  [API] 응답 (fallback): {response.status}  body={body[:200]!r}")
+                else:
+                    response = await page.request.get(
+                        report_target,
+                        headers={"Referer": "https://commons.ssu.ac.kr/"},
+                    )
+                    body = await response.text()
+                    log(f"  [API] 응답: {response.status}  body={body[:200]!r}")
             except Exception as e:
                 log(f"  [API] 진도 보고 실패: {e}")
             next_report = current + report_interval
@@ -325,6 +429,7 @@ async def play_lecture(
     lecture_url: str,
     on_progress: Optional[Callable[[PlaybackState], None]] = None,
     debug: bool = False,
+    fallback_duration: float = 0.0,
 ) -> PlaybackState:
     """
     강의 URL을 headless 브라우저로 재생한다.
@@ -341,18 +446,109 @@ async def play_lecture(
     log = print if debug else (lambda *a, **k: None)
     state = PlaybackState()
 
+    # 0. H.264 우회: VP8 WebM 더미 영상으로 commonscdn MP4 인터셉트
+    # Chromium headless(ARM64 포함)는 H.264 미지원 → flashErrorPage.html 로드 → Plan A 실패
+    # VP8 WebM을 대신 제공하면 Chromium이 정상 재생 → Plan A 동작 → LTI 세션 내에서 progress 보고
+    _using_fake_video = False
+    if fallback_duration > 0:
+        log(f"[0] H.264 우회: VP8 더미 영상 생성 중 (duration={fallback_duration:.0f}s)...")
+        try:
+            _fake_video_bytes = await _create_fake_webm(fallback_duration)
+            log(f"[0] 더미 영상 생성 완료 ({len(_fake_video_bytes):,} bytes)")
+
+            async def _serve_fake(route, request):
+                await route.fulfill(
+                    status=200,
+                    headers={"Content-Type": "video/webm"},
+                    body=_fake_video_bytes,
+                )
+
+            await page.route("**/*.mp4", _serve_fake)
+            # canPlayType / isTypeSupported 오버라이드:
+            # Chromium은 H.264 미지원 → canPlayType("video/mp4; codecs=avc1") = ""
+            # 플레이어가 이 값을 보고 MP4 요청 없이 바로 flashErrorPage로 분기.
+            # init script로 'probably'를 반환하게 속이면 MP4를 실제로 요청하고,
+            # 그 요청을 위 route가 VP8 WebM으로 대체한다.
+            await page.add_init_script("""
+                (function() {
+                    if (window.MediaSource && MediaSource.isTypeSupported) {
+                        var _origMSE = MediaSource.isTypeSupported.bind(MediaSource);
+                        MediaSource.isTypeSupported = function(type) {
+                            if (type && (type.indexOf('avc') !== -1 || type.indexOf('mp4') !== -1)) return true;
+                            return _origMSE(type);
+                        };
+                    }
+                    var _origCPT = HTMLVideoElement.prototype.canPlayType;
+                    HTMLVideoElement.prototype.canPlayType = function(type) {
+                        if (type && (type.indexOf('mp4') !== -1 || type.indexOf('avc') !== -1 || type.indexOf('h264') !== -1)) return 'probably';
+                        return _origCPT.call(this, type);
+                    };
+                })();
+            """)
+            _using_fake_video = True
+            log("[0] MP4 인터셉트 (*.mp4 전체) + canPlayType 오버라이드 등록 완료")
+        except Exception as e:
+            log(f"[0] 더미 영상 생성 실패 ({e}) — 원본 스트림으로 계속")
+
     # 1. 강의 페이지로 이동
     log(f"[1] 강의 페이지 이동: {lecture_url}")
 
-    # 진도 API 실제 요청 스니핑 (브라우저가 보내는 정확한 형식 확인)
+    # 네트워크 요청/응답 스니핑 (commons.ssu.ac.kr + canvas learningx 전체)
+    # page 객체가 재사용되므로 리스너는 반드시 finally에서 제거해야 누적 방지
+    _on_request = None
+    _on_response = None
     if debug:
         def _on_request(request):
-            if "progress" in request.url and "learningx" in request.url:
-                log(f"  [SNIFF] {request.method} {request.url}")
-                log(f"  [SNIFF] headers={dict(request.headers)}")
+            url = request.url
+            if "google-analytics" in url or "gtm" in url:
+                return
+            if "commons.ssu.ac.kr" in url or "learningx" in url:
+                log(f"  [SNIFF→REQ] {request.method} {url}")
                 if request.post_data:
-                    log(f"  [SNIFF] body={request.post_data!r}")
+                    log(f"  [SNIFF→REQ] body={request.post_data!r}")
+
+        _FULL_BODY_KEYWORDS = ("attendance_items", "content.php", "chapter.xml", "progress", "lessons")
+
+        async def _on_response(response):
+            url = response.url
+            if "google-analytics" in url or "gtm" in url:
+                return
+            if "commons.ssu.ac.kr" in url or "learningx" in url:
+                try:
+                    body = await response.text()
+                except Exception:
+                    body = "(읽기 실패)"
+                headers = dict(response.headers)
+                set_cookie = headers.get("set-cookie", "")
+                log(f"  [SNIFF←RES] {response.status} {url}")
+                if set_cookie:
+                    log(f"  [SNIFF←RES] set-cookie={set_cookie}")
+                # 중요 API는 전체 body 출력, 나머지는 500자 제한
+                if body:
+                    if any(kw in url for kw in _FULL_BODY_KEYWORDS):
+                        log(f"  [SNIFF←RES] body={body!r}")
+                    elif len(body) < 500:
+                        log(f"  [SNIFF←RES] body={body!r}")
+
         page.on("request", _on_request)
+        page.on("response", _on_response)
+
+    async def _cleanup():
+        if _on_request:
+            try:
+                page.remove_listener("request", _on_request)
+            except Exception:
+                pass
+        if _on_response:
+            try:
+                page.remove_listener("response", _on_response)
+            except Exception:
+                pass
+        if _using_fake_video:
+            try:
+                await page.unroute("**/*.mp4")
+            except Exception:
+                pass
 
     await page.goto(lecture_url, wait_until="networkidle")
     log(f"    → 현재 URL: {page.url}")
@@ -366,6 +562,7 @@ async def play_lecture(
         for f in page.frames:
             log(f"       name={f.name!r}  url={f.url}")
         state.error = "비디오 프레임을 찾지 못했습니다."
+        await _cleanup()
         return state
     # frame이 나중에 navigate되면 URL이 바뀌므로 지금 즉시 저장
     player_url_snapshot = player_frame.url
@@ -412,7 +609,8 @@ async def play_lecture(
     if not frame:
         log("    → video frame 없음. 진도 API 직접 호출 방식으로 전환...")
         log(f"    → player URL: {player_url_snapshot}")
-        return await _play_via_progress_api(page, player_url_snapshot, on_progress, log)
+        await _cleanup()
+        return await _play_via_progress_api(page, player_url_snapshot, on_progress, log, fallback_duration)
     log(f"    → video frame 발견: {frame.url}")
 
     # 6. video 요소 duration 대기
@@ -429,6 +627,7 @@ async def play_lecture(
     else:
         log("[6] 타임아웃. 페이지 상태 진단:")
         await _debug_page_state(page, frame, log)
+        _cleanup()
         state.error = "영상이 시작되지 않았습니다."
         return state
 
@@ -467,4 +666,5 @@ async def play_lecture(
 
         await asyncio.sleep(_POLL_INTERVAL)
 
+    await _cleanup()
     return state

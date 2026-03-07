@@ -46,23 +46,32 @@ class CourseScraper:
         self._page = None
 
     async def _setup_browser(self):
-        browser = await self._pw.chromium.launch(
-            headless=self.headless,
-            args=[
-                "--disable-blink-features=AutomationControlled",
-                "--enable-proprietary-codecs",
-                "--disable-web-security",
-                "--use-fake-ui-for-media-stream",
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-accelerated-2d-canvas",
-                "--no-first-run",
-                "--no-zygote",
-                "--disable-gpu",
-                "--window-size=1280,720",
-            ],
-        )
+        _args = [
+            "--disable-blink-features=AutomationControlled",
+            "--enable-proprietary-codecs",
+            "--disable-web-security",
+            "--use-fake-ui-for-media-stream",
+            "--no-sandbox",
+            "--disable-setuid-sandbox",
+            "--disable-dev-shm-usage",
+            "--disable-accelerated-2d-canvas",
+            "--no-first-run",
+            "--no-zygote",
+            "--disable-gpu",
+            "--window-size=1280,720",
+        ]
+        # Chrome(H.264 포함) 우선 시도 — ARM64 등 미지원 환경에서는 Chromium으로 fallback
+        try:
+            browser = await self._pw.chromium.launch(
+                headless=self.headless,
+                channel="chrome",
+                args=_args,
+            )
+        except Exception:
+            browser = await self._pw.chromium.launch(
+                headless=self.headless,
+                args=_args,
+            )
         context = await browser.new_context(
             user_agent=(
                 "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "

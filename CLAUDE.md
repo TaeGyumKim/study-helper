@@ -6,11 +6,11 @@
 ## 실행 방법
 
 ```bash
-docker compose up               # 컨테이너 빌드 + 실행 (최초 또는 코드 변경 후)
-docker compose up --no-build    # 이미지 재빌드 없이 실행 (src/ 변경만 있을 때)
-docker compose down             # 컨테이너 종료
+docker compose run --rm study-helper          # 정상 실행 (TUI 직접 연결)
+docker compose build && docker compose run --rm study-helper  # 이미지 재빌드 후 실행
 ```
 
+- **`docker compose up` 사용 금지**: 로그 멀티플렉싱으로 TUI 깨짐. `run --rm`만 사용할 것
 - `src/`는 볼륨 마운트되어 있어 코드 수정 후 재빌드 없이 재실행만 해도 반영됨
 - `.env`, `.secret_key`는 볼륨 마운트로 호스트에 영속화됨
 - 다운로드 파일은 `./data/`에 저장됨 (컨테이너 내 `/data/`)
