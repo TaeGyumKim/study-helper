@@ -77,7 +77,7 @@ jobs:
           body: |
             # study-helper ${{ github.ref_name }}
 
-            숭실대학교 LMS 강의 영상 백그라운드 재생(출석) · 다운로드 · AI 요약 도구.
+            숭실대학교 LMS 강의 영상 재생 · 다운로드 · AI 요약 도구.
 
             ---
 
