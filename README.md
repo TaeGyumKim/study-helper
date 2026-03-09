@@ -65,18 +65,28 @@
 
 ## 설치 및 실행
 
-### 1. 저장소 클론
+### 1. `docker-compose.yml` 다운로드
+
+[최신 릴리즈](https://github.com/igor0670/study-helper/releases/latest)에서 `docker-compose.yml`을 다운로드하거나 아래 명령어로 받습니다.
 
 ```bash
-git clone https://github.com/your-repo/study-helper.git
-cd study-helper
+curl -O https://raw.githubusercontent.com/igor0670/study-helper/main/docker-compose.yml
 ```
 
-### 2. 빌드 및 실행
+### 2. `.env` 파일 생성
+
+`.env.example`을 다운로드 후 `.env`로 이름을 변경합니다.
 
 ```bash
-# 최초 빌드 (수 분 소요 — Chromium, Whisper 모델 다운로드 포함)
-docker compose build
+curl -O https://raw.githubusercontent.com/igor0670/study-helper/main/.env.example
+mv .env.example .env
+```
+
+### 3. 이미지 pull 및 실행
+
+```bash
+# Docker Hub에서 이미지 pull (최초 실행 시 자동으로 수행됨)
+docker compose pull
 
 # 실행
 docker compose run --rm study-helper
@@ -84,7 +94,7 @@ docker compose run --rm study-helper
 
 > `docker compose up` 사용 금지 — 로그 멀티플렉싱으로 TUI가 깨집니다. `run --rm`만 사용하세요.
 
-### 3. 초기 설정
+### 4. 초기 설정
 
 최초 실행 시 자동으로 설정 화면이 표시됩니다. 학번/비밀번호를 입력하면 암호화되어 저장됩니다.
 

@@ -34,7 +34,6 @@ jobs:
           images: ${{ secrets.DOCKERHUB_USERNAME }}/study-helper
           tags: |
             type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: 빌드 및 Docker Hub 푸시
@@ -96,23 +95,28 @@ jobs:
 
             ## 설치 및 실행
 
-            1. 아래 첨부 파일(`.env.example`) 다운로드 후 `.env`로 이름 변경
+            1. 아래 첨부 파일(`docker-compose.yml`, `.env.example`) 다운로드
 
-            2. `.env` 파일 열어 필요한 값 설정 (학번/비밀번호는 첫 실행 시 자동 저장)
+            2. `.env.example` → `.env`로 이름 변경 후 필요한 값 설정 (학번/비밀번호는 첫 실행 시 자동 저장)
 
-            3. 실행
+            3. 이미지 pull 및 실행
             ```bash
+            docker compose pull
             docker compose run --rm study-helper
             ```
 
+            > `docker compose up` 사용 금지 — 로그 멀티플렉싱으로 TUI가 깨집니다. `run --rm`만 사용하세요.
+
             ---
 
-            ## Docker 이미지 직접 사용
+            ## Docker Hub
 
             ```bash
             docker pull ${{ secrets.DOCKERHUB_USERNAME }}/study-helper:${{ github.ref_name }}
             ```
 
-          files: .env.example
+          files: |
+            docker-compose.yml
+            .env.example
           prerelease: ${{ contains(github.ref_name, 'beta') || contains(github.ref_name, 'alpha') || contains(github.ref_name, 'rc') }}
           draft: false

@@ -1,5 +1,28 @@
 # Changelog
 
+## [v1.0.1] - 2026-03-09
+
+### 변경
+- **Docker Hub 배포**: Docker Hub(`igor0670/study-helper`)를 통한 이미지 배포로 전환
+  - `docker-compose.yml`을 로컬 빌드 대신 Docker Hub 이미지(`igor0670/study-helper:latest`) 사용으로 변경
+  - GitHub Release에 `docker-compose.yml`, `.env.example` 첨부 파일 자동 포함
+  - Release 노트에 Docker Hub 설치 방법 안내 추가
+- **릴리즈 태그 정리**: `v1.0` 형식의 불필요한 중간 태그 생성 제거 — `{{version}}`(예: `1.0.1`)과 `latest` 두 태그만 생성
+- **README 설치 방법 업데이트**: Docker Hub 이미지 기반 설치 흐름으로 재작성
+
+### 보안
+- **Debian base 이미지 고정**: `python:3.11-slim` → `python:3.11-slim-bookworm`으로 명시하여 빌드 재현성 확보
+- **시스템 패키지 CVE 패치**: `apt-get upgrade -y` 추가로 알려진 취약점 대응
+  - CVE-2026-1837 (jpeg-xl)
+  - CVE-2026-23865 (freetype)
+  - CVE-2025-45582 (tar)
+- **Python 패키지 CVE 패치**:
+  - CVE-2025-8869: `pip` 최신 버전으로 업그레이드
+  - CVE-2026-24049: `wheel` 최신 버전으로 업그레이드
+  - CVE-2025-68146, CVE-2026-22701: `filelock>=3.25.0` 제약 추가 (3.20.0 취약 버전 제외)
+
+---
+
 ## [v1.0.0] - 2026-03-09
 
 ### 추가
