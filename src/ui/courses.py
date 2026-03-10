@@ -8,6 +8,7 @@ from rich.prompt import Prompt
 from rich.text import Text
 from rich import box
 
+from src.config import APP_VERSION
 from src.scraper.models import Course, CourseDetail, LectureItem, Week
 
 console = Console()
@@ -23,7 +24,7 @@ def show_loading(message: str):
     console.print(f"  [yellow]{message}[/yellow]")
 
 
-def _redraw_course_list(courses: List[Course], details: List[Optional[CourseDetail]]) -> None:
+def _redraw_course_list(courses: List[Course], details: List[Optional[CourseDetail]], user_id: str = "") -> None:
     """과목 목록 테이블을 (재)출력한다."""
     console.clear()
     console.print(Panel(
@@ -31,6 +32,10 @@ def _redraw_course_list(courses: List[Course], details: List[Optional[CourseDeta
         border_style="cyan",
         padding=(0, 4),
     ))
+    info_parts = [f"v{APP_VERSION}"]
+    if user_id:
+        info_parts.append(f"학번: {user_id}")
+    console.print(Text("  " + "  |  ".join(info_parts), style="dim"))
     console.print()
 
     table = Table(
@@ -70,14 +75,14 @@ def _redraw_course_list(courses: List[Course], details: List[Optional[CourseDeta
 _AUTO_SENTINEL = "__AUTO__"
 
 
-def show_course_list(courses: List[Course], details: List[Optional[CourseDetail]]) -> Optional[Course]:
+def show_course_list(courses: List[Course], details: List[Optional[CourseDetail]], user_id: str = "") -> Optional[Course]:
     """
     과목 목록을 테이블로 표시하고 선택된 Course를 반환한다.
     0 입력 시 None 반환 (종료). 'setting' 입력 시 설정 화면으로 이동.
     'auto' 입력 시 _AUTO_SENTINEL 반환 (자동 모드 진입 신호).
     details는 courses와 같은 순서의 CourseDetail 리스트 (로딩 실패 시 None).
     """
-    _redraw_course_list(courses, details)
+    _redraw_course_list(courses, details, user_id)
 
     while True:
         choice = Prompt.ask("  과목 선택 [dim](0: 종료 / setting: 설정 / auto: 자동 모드)[/dim]")
@@ -86,7 +91,7 @@ def show_course_list(courses: List[Course], details: List[Optional[CourseDetail]
         if choice.lower() == "setting":
             from src.ui.settings import run_settings
             run_settings()
-            _redraw_course_list(courses, details)
+            _redraw_course_list(courses, details, user_id)
             continue
         if choice.lower() == "auto":
             return _AUTO_SENTINEL  # type: ignore[return-value]

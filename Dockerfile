@@ -32,6 +32,7 @@ RUN uv run playwright install --with-deps chrome 2>/dev/null \
 
 # 소스 코드 복사
 COPY src/ ./src/
+COPY CHANGELOG.md ./
 
 # 다운로드 경로 및 캐시 디렉토리 생성
 RUN mkdir -p /data/downloads \

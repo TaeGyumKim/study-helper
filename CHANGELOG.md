@@ -1,5 +1,20 @@
 # Changelog
 
+## [v1.0.3] - 2026-03-10
+
+### 수정
+- **100% 완료 보고 ErrAlreadyInView 오류 수정**: `_report_completion` 함수에 `commons_frame` / `use_page_eval` 파라미터 추가
+  - Plan A(video DOM 방식) 완료 후: `page.evaluate fetch`로 canvas.ssu.ac.kr 동일 오리진에서 호출 (sl=1 세션 중에도 정상 동작)
+  - Plan B(진도 API 방식) 완료 후: 재생 루프에서 사용한 `commons_frame`을 그대로 재사용하여 JSONP 방식으로 호출 (ErrAlreadyInView 우회)
+- **정상 재생 시 로그 파일 미생성**: 재생 성공 시 `play_ok` 로그를 저장하지 않도록 변경 — 오류/미완료 상태에서만 `logs/YYYYMMDD_HHMMSS_play.log` 생성
+- **버전 자동 읽기**: `config.py`의 `APP_VERSION`을 정적 상수에서 `CHANGELOG.md` 첫 번째 `## [vX.Y.Z]` 항목을 파싱하는 동적 함수로 교체 — 버전 수동 갱신 불필요
+
+### 추가
+- **메인 화면 버전·학번 표시**: 과목 목록 화면 상단에 현재 앱 버전(`vX.Y.Z`)과 로그인된 학번을 표시
+- **CHANGELOG.md Docker 이미지 포함**: `Dockerfile`에 `COPY CHANGELOG.md ./` 추가하여 Docker Hub 배포 이미지에서도 버전 자동 읽기 동작
+
+---
+
 ## [v1.0.2] - 2026-03-09
 
 ### 수정

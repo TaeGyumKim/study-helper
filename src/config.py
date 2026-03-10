@@ -56,6 +56,23 @@ def _default_download_dir() -> str:
     return str(Path.home() / "Downloads")
 
 
+def _read_version() -> str:
+    """CHANGELOG.md의 첫 번째 ## [vX.Y.Z] 항목에서 버전을 읽어온다."""
+    import re
+    changelog = Path(__file__).parent.parent / "CHANGELOG.md"
+    try:
+        for line in changelog.read_text(encoding="utf-8").splitlines():
+            m = re.match(r"^## \[v(.+?)\]", line)
+            if m:
+                return m.group(1)
+    except Exception:
+        pass
+    return "unknown"
+
+
+APP_VERSION = _read_version()
+
+
 class Config:
     LMS_USER_ID: str = _load_credential("LMS_USER_ID")
     LMS_PASSWORD: str = _load_credential("LMS_PASSWORD")

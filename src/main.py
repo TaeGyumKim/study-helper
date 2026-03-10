@@ -84,7 +84,7 @@ async def run():
 
     # ── 4. 과목 선택 루프 ────────────────────────────────────────
     while True:
-        selected = show_course_list(courses, details)
+        selected = show_course_list(courses, details, user_id=user_id)
         if selected is None:
             console.print("\n  [dim]종료합니다.[/dim]\n")
             break

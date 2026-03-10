@@ -241,16 +241,20 @@ async def _report_completion(
     player_url: str,
     duration: float,
     log: Callable,
+    commons_frame: Optional[Frame] = None,
+    use_page_eval: bool = False,
 ):
     """
-    Plan A 완료 후 progress API에 100% 진도를 한 번 직접 보고한다.
+    Plan A/B 완료 후 progress API에 100% 진도를 한 번 직접 보고한다.
 
     플레이어 JS(uni-player-event.js)가 가짜 WebM 재생 중 progress API를 호출하지
     않는 경우를 대비한 안전망. Plan A가 성공하더라도 항상 호출한다.
 
     ErrAlreadyInView 처리:
-    - sl=1 세션이 활성 상태(commons iframe 로드 중)이면 ErrAlreadyInView가 반환됨.
-    - 이 경우 대시보드로 이동해 sl=1 세션을 종료한 뒤 page.request.get으로 재시도.
+    - use_page_eval=True (Plan A): page.evaluate fetch로 canvas.ssu.ac.kr 동일 오리진 호출.
+      Plan A에서는 sl=1 세션이 활성 중이므로 JSONP 대신 이 방식을 사용.
+    - commons_frame 있음 (Plan B): JSONP 방식으로 sl=0 세션에서 호출 (ErrAlreadyInView 우회).
+    - 둘 다 없거나 실패 시: page.request.get으로 폴백.
     """
     import time
 
@@ -288,46 +292,52 @@ async def _report_completion(
 
     log(f"  [완료 보고] 100% 진도 직접 전송 (duration={duration:.1f}s)")
 
-    # 1차: page 컨텍스트(canvas.ssu.ac.kr, 동일 오리진)에서 fetch — 쿠키 자동 포함
-    report_url, _ = _build_url()
-    try:
-        result = await page.evaluate(f"""
-            async () => {{
-                try {{
-                    const resp = await fetch({json.dumps(report_url)});
-                    return {{s: resp.status, b: (await resp.text()).slice(0, 300)}};
-                }} catch(e) {{
-                    return {{s: -1, b: e.message}};
+    # Plan A: page.evaluate fetch (canvas.ssu.ac.kr 동일 오리진 — sl=1 세션 중에도 동작)
+    if use_page_eval:
+        report_url, _ = _build_url()
+        try:
+            result = await page.evaluate(f"""
+                async () => {{
+                    try {{
+                        const resp = await fetch({json.dumps(report_url)});
+                        return {{s: resp.status, b: (await resp.text()).slice(0, 300)}};
+                    }} catch(e) {{
+                        return {{s: -1, b: e.message}};
+                    }}
                 }}
-            }}
-        """)
-        status = result.get("s")
-        body = result.get("b", "")
-        log(f"  [완료 보고] page ctx fetch: {status}  body={body!r}")
-        if status == 200:
-            return  # 성공
-        log(f"  [완료 보고] page ctx fetch 실패 ({status}) — 대시보드 이동 후 재시도")
-    except Exception as e:
-        log(f"  [완료 보고] page ctx fetch 오류: {e}")
+            """)
+            status = result.get("s")
+            body = result.get("b", "")
+            log(f"  [완료 보고] page ctx fetch: {status}  body={body!r}")
+            if status == 200 and '"result":true' in body:
+                return
+            log(f"  [완료 보고] page ctx fetch 실패 ({status}) — page.request.get으로 폴백")
+        except Exception as e:
+            log(f"  [완료 보고] page ctx fetch 오류: {e}")
 
-    # 2차: sl=1 세션 종료 후 page.request.get으로 재시도
-    try:
-        await page.goto("https://canvas.ssu.ac.kr/", wait_until="domcontentloaded", timeout=15000)
-        await asyncio.sleep(3)
-        log("  [완료 보고] 뷰 세션 종료 완료")
-    except Exception as e:
-        log(f"  [완료 보고] 대시보드 이동 실패 (무시): {e}")
+    # Plan B: commons_frame JSONP (sl=0 세션 — ErrAlreadyInView 우회)
+    elif commons_frame:
+        report_url, callback = _build_url()
+        try:
+            body = await _call_progress_jsonp(commons_frame, report_url, callback)
+            log(f"  [완료 보고] JSONP 응답: {body[:200]!r}")
+            if '"result":true' in body:
+                return
+            log("  [완료 보고] JSONP 결과 false — page.request.get으로 폴백")
+        except Exception as e:
+            log(f"  [완료 보고] JSONP 실패 ({e}) — page.request.get으로 폴백")
 
-    report_url2, _ = _build_url()
+    # 폴백: page.request.get
+    report_url_fb, _ = _build_url()
     try:
         response = await page.request.get(
-            report_url2,
+            report_url_fb,
             headers={"Referer": "https://commons.ssu.ac.kr/"},
         )
         body = await response.text()
-        log(f"  [완료 보고] 재시도 응답: {response.status}  body={body[:200]!r}")
+        log(f"  [완료 보고] request.get 응답: {response.status}  body={body[:200]!r}")
     except Exception as e:
-        log(f"  [완료 보고] 재시도 실패: {e}")
+        log(f"  [완료 보고] request.get 실패: {e}")
 
 
 async def _play_via_learningx_api(
@@ -457,25 +467,24 @@ async def _play_via_progress_api(
             state.error = "영상 길이를 알 수 없습니다."
             return state
 
-    # commons 프레임 탐색: flashErrorPage.html을 포함한 모든 commons.ssu.ac.kr 프레임
-    # _play_via_progress_api 호출 시점에는 아직 프레임이 살아있음
+    # sl=1 세션 해제: player_url의 sl=1을 sl=0으로 교체해 commons를 재로드.
+    # sl=1은 서버에 "현재 시청 중" 세션을 등록해 ErrAlreadyInView를 유발하므로,
+    # sl=0으로 재방문하면 세션 충돌 없이 진도 API를 호출할 수 있다.
+    # 재로드 후 그 commons 프레임 내부에서 JSONP로 progress를 보고한다.
+    sl0_url = player_url.replace("sl=1", "sl=0")
     commons_frame: Optional[Frame] = None
-    for f in page.frames:
-        if "commons.ssu.ac.kr" in f.url:
-            commons_frame = f
-            break
-
-    if commons_frame:
-        log(f"  [API] commons 프레임 발견 ({commons_frame.url})")
-        log(f"  [API] JSONP 방식으로 진도 보고 (ErrAlreadyInView 우회)")
-    else:
-        # commons 프레임이 없으면 대시보드로 이동해 플레이어 세션 종료 시도
-        log("  [API] commons 프레임 없음 — 대시보드로 이동 후 직접 호출")
-        try:
-            await page.goto("https://canvas.ssu.ac.kr/", wait_until="networkidle", timeout=15000)
-            await asyncio.sleep(2)
-        except Exception as e:
-            log(f"  [API] 대시보드 이동 실패 (무시하고 계속): {e}")
+    try:
+        log(f"  [API] sl=0으로 commons 재로드: {sl0_url[:80]}...")
+        await page.goto(sl0_url, wait_until="domcontentloaded", timeout=20000)
+        await asyncio.sleep(2)
+        # sl=0으로 로드된 commons frame 탐색
+        for f in page.frames:
+            if "commons.ssu.ac.kr" in f.url:
+                commons_frame = f
+                break
+        log(f"  [API] commons frame({'발견' if commons_frame else '없음'})")
+    except Exception as e:
+        log(f"  [API] commons 재로드 실패 ({e}) — page.request.get으로 폴백")
 
     log(f"  [API] 진도 API 방식으로 재생 시뮬레이션")
     log(f"  [API] duration={duration:.1f}s  progress_url={progress_url}")
@@ -522,14 +531,12 @@ async def _play_via_progress_api(
                 log(f"  [API] 진도 보고: {int(current)}s/{int(duration)}s")
 
                 if commons_frame:
-                    # commons 프레임 내부에서 JSONP 스크립트 태그 주입
                     try:
                         body = await _call_progress_jsonp(commons_frame, report_target, callback)
                         log(f"  [API] 응답 (JSONP): {body[:200]!r}")
-                    except Exception as e:
-                        log(f"  [API] JSONP 오류 ({e}) — page.request.get으로 폴백")
+                    except Exception as je:
+                        log(f"  [API] JSONP 실패 ({je}) — page.request.get으로 폴백")
                         commons_frame = None
-                        # 폴백: page.request.get
                         response = await page.request.get(
                             report_target,
                             headers={"Referer": "https://commons.ssu.ac.kr/"},
@@ -550,6 +557,10 @@ async def _play_via_progress_api(
     state.ended = True
     if on_progress:
         on_progress(state)
+
+    # 재생 루프 종료 후 100% 완료 보고 — commons_frame 재사용으로 ErrAlreadyInView 방지
+    await _report_completion(page, player_url, state.duration, log, commons_frame)
+
     return state
 
 
@@ -1073,7 +1084,7 @@ async def play_lecture(
 
     # Plan A 완료 후 progress API에 100% 직접 보고
     # 플레이어 JS가 가짜 WebM 재생 중 progress API를 호출하지 않는 경우 대비
-    await _report_completion(page, player_url_snapshot, state.duration, log)
+    await _report_completion(page, player_url_snapshot, state.duration, log, use_page_eval=True)
 
     await _cleanup()
     return state
