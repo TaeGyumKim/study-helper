@@ -8,11 +8,11 @@
 
 **과목 목록**
 
-![과목 목록](images/dashboard.PNG)
+![과목 목록](images/main.png)
 
 **강의 목록**
 
-![강의 목록](images/video_list.PNG)
+![강의 목록](images/list.png)
 
 ---
 
@@ -175,7 +175,7 @@ Gemini API 키 발급 방법은 [Gemini API 키 발급 가이드](docs/gemini-ap
 
 ## 자동 모드
 
-![자동 모드](images/auto_mod.PNG)
+![자동 모드](images/auto.png)
 
 과목 목록 화면에서 `auto`를 입력하면 자동 모드로 진입합니다.
 
