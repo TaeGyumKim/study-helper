@@ -11,7 +11,6 @@ from pathlib import Path
 
 from cryptography.fernet import Fernet, InvalidToken
 
-
 _PREFIX = "enc:"
 _KEY_PATH = Path(__file__).parent.parent / ".secret_key"
 
@@ -47,7 +46,7 @@ def decrypt(value: str) -> str:
     """
     if not value.startswith(_PREFIX):
         return value
-    token = value[len(_PREFIX):]
+    token = value[len(_PREFIX) :]
     try:
         return _fernet().decrypt(token.encode()).decode()
     except (InvalidToken, Exception):
