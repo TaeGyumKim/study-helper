@@ -73,6 +73,7 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           name: study-helper ${{ github.ref_name }}
+          overwrite_files: true
           body: |
             # study-helper ${{ github.ref_name }}
 
