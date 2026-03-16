@@ -68,11 +68,22 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
+      - name: 기존 Release asset 삭제
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          RELEASE_ID=$(gh api repos/${{ github.repository }}/releases/tags/${{ github.ref_name }} --jq '.id' 2>/dev/null || echo "")
+          if [ -n "$RELEASE_ID" ]; then
+            gh api repos/${{ github.repository }}/releases/${RELEASE_ID}/assets --jq '.[].id' | \
+              xargs -I{} gh api --method DELETE repos/${{ github.repository }}/releases/assets/{} || true
+          fi
+
       - name: GitHub Release 생성
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           name: study-helper ${{ github.ref_name }}
+          overwrite_files: true
           body: |
             # study-helper ${{ github.ref_name }}
 

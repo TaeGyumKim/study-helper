@@ -15,6 +15,17 @@ _PREFIX = "enc:"
 _KEY_PATH = Path(__file__).parent.parent / ".secret_key"
 
 
+def _resolve_key_path() -> Path:
+    """실제 키 파일 경로를 반환한다.
+
+    Docker 바인드 마운트 시 호스트에 파일이 없으면 .secret_key가 디렉토리로
+    생성되므로, 그 경우 디렉토리 내부의 key 파일을 사용한다.
+    """
+    if _KEY_PATH.is_dir():
+        return _KEY_PATH / "key"
+    return _KEY_PATH
+
+
 def _load_or_create_key() -> bytes:
     """
     .secret_key 파일에서 키를 읽거나, 없으면 새로 생성해서 저장한다.
