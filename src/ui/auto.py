@@ -154,6 +154,7 @@ async def run_auto_mode(scraper, courses, details) -> None:
 
     # ── 스케줄 설정 ───────────────────────────────────────────────
     schedule_hours = _configure_schedule()
+    run_now = Prompt.ask("  즉시 실행할까요?", choices=["y", "n"], default="y", show_choices=True).strip() == "y"
 
     # ── 자동 모드 루프 ────────────────────────────────────────────
     console.clear()
@@ -186,33 +187,37 @@ async def run_auto_mode(scraper, courses, details) -> None:
 
     try:
         while not stop_event.is_set():
-            next_time = _next_schedule_time(schedule_hours)
+            if run_now:
+                # 첫 실행 시 대기 없이 바로 진행
+                run_now = False
+            else:
+                next_time = _next_schedule_time(schedule_hours)
 
-            # 안내 줄 출력 (한 번만)
-            sys.stdout.write("  0 + Enter 로 종료\n")
-            sys.stdout.flush()
-
-            # 대기 루프 — \r로 같은 줄 덮어쓰기
-            while not stop_event.is_set():
-                now = datetime.now(KST)
-                if now >= next_time:
-                    break
-                remaining = _fmt_remaining(next_time)
-                line = (
-                    f"  \033[1;32m● 자동 모드 동작 중\033[0m"
-                    f"  \033[2m다음 체크  {next_time.strftime('%H:%M')} ({remaining} 후)\033[0m"
-                    "          "
-                )
-                sys.stdout.write(f"\r{line}")
+                # 안내 줄 출력 (한 번만)
+                sys.stdout.write("  0 + Enter 로 종료\n")
                 sys.stdout.flush()
-                await asyncio.sleep(1)
 
-            # 상태 줄 정리 후 개행
-            sys.stdout.write("\r" + " " * 80 + "\r\n")
-            sys.stdout.flush()
+                # 대기 루프 — \r로 같은 줄 덮어쓰기
+                while not stop_event.is_set():
+                    now = datetime.now(KST)
+                    if now >= next_time:
+                        break
+                    remaining = _fmt_remaining(next_time)
+                    line = (
+                        f"  \033[1;32m● 자동 모드 동작 중\033[0m"
+                        f"  \033[2m다음 체크  {next_time.strftime('%H:%M')} ({remaining} 후)\033[0m"
+                        "          "
+                    )
+                    sys.stdout.write(f"\r{line}")
+                    sys.stdout.flush()
+                    await asyncio.sleep(1)
 
-            if stop_event.is_set():
-                break
+                # 상태 줄 정리 후 개행
+                sys.stdout.write("\r" + " " * 80 + "\r\n")
+                sys.stdout.flush()
+
+                if stop_event.is_set():
+                    break
 
             console.print()
             now_str = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")
