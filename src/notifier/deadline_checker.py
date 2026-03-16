@@ -138,7 +138,12 @@ def find_approaching_deadlines(
             for lec in week.lectures:
                 if lec.lecture_type in VIDEO_LECTURE_TYPES:
                     continue
+                # 완료 판별: completion 또는 attendance 둘 중 하나라도 완료면 건너뜀
                 if lec.completion == "completed":
+                    continue
+                if lec.attendance in ("attendance", "late", "excused"):
+                    continue
+                if lec.is_upcoming:
                     continue
                 if not lec.end_date:
                     continue
