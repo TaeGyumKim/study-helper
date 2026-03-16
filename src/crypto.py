@@ -1,43 +1,94 @@
 """
 민감 정보 암호화/복호화 유틸리티.
 
-최초 실행 시 머신 고유 Fernet 키를 생성해서 .secret_key 파일에 저장한다.
-같은 기기에서만 복호화 가능하므로 .env 파일이 유출돼도 값을 읽을 수 없다.
+암호화 키 저장 우선순위:
+1. OS 키체인 (keyring 패키지 사용 가능 시) — 네이티브 앱 환경
+2. .secret_key 파일 — Docker / CLI 환경
 
 암호화된 값은 "enc:" 접두사로 구별한다.
 """
 
+import os
 from pathlib import Path
 
 from cryptography.fernet import Fernet, InvalidToken
 
 _PREFIX = "enc:"
-_KEY_PATH = Path(__file__).parent.parent / ".secret_key"
+
+# 키 경로: STUDY_HELPER_DATA_DIR이 설정되면 그 안의 .secret_key 사용
+_data_dir = os.getenv("STUDY_HELPER_DATA_DIR", "")
+_KEY_PATH = Path(_data_dir) / ".secret_key" if _data_dir else Path(__file__).parent.parent / ".secret_key"
+
+_KEYRING_SERVICE = "study-helper"
+_KEYRING_KEY = "fernet-key"
+
+
+def _try_keyring_load() -> bytes | None:
+    """OS 키체인에서 Fernet 키를 로드한다. 키체인 미지원 시 None."""
+    try:
+        import keyring
+
+        stored = keyring.get_password(_KEYRING_SERVICE, _KEYRING_KEY)
+        if stored:
+            return stored.encode()
+    except Exception:
+        pass
+    return None
+
+
+def _try_keyring_save(key: bytes) -> bool:
+    """OS 키체인에 Fernet 키를 저장한다. 성공 시 True."""
+    try:
+        import keyring
+
+        keyring.set_password(_KEYRING_SERVICE, _KEYRING_KEY, key.decode())
+        return True
+    except Exception:
+        return False
+
+
+def _resolve_key_file() -> Path:
+    """키 파일 경로를 결정한다. .secret_key가 디렉토리일 때 내부 key 파일 사용."""
+    if _KEY_PATH.is_dir():
+        return _KEY_PATH / "key"
+    return _KEY_PATH
 
 
 def _load_or_create_key() -> bytes:
-    """
-    .secret_key 파일에서 키를 읽거나, 없으면 새로 생성해서 저장한다.
-    .secret_key는 .gitignore에 등록되어야 한다.
+    """암호화 키를 로드하거나 새로 생성한다.
 
-    Docker 볼륨 마운트 시 .secret_key가 디렉토리로 생성될 수 있으므로
-    디렉토리인 경우 내부의 key 파일을 사용한다.
+    우선순위:
+    1. OS 키체인 (keyring)
+    2. .secret_key 파일
+    3. 새 키 생성 후 키체인 → 파일 순으로 저장
     """
-    key_file = _KEY_PATH / "key" if _KEY_PATH.is_dir() else _KEY_PATH
+    # 1. keyring에서 시도
+    key = _try_keyring_load()
+    if key:
+        return key
 
+    # 2. 파일에서 시도
+    key_file = _resolve_key_file()
     if key_file.exists() and key_file.is_file():
-        return key_file.read_bytes().strip()
+        key = key_file.read_bytes().strip()
+        # 파일에 있으면 키체인에도 동기화 시도
+        _try_keyring_save(key)
+        return key
 
+    # 3. 새 키 생성
     key = Fernet.generate_key()
-    if _KEY_PATH.is_dir():
-        key_file = _KEY_PATH / "key"
-    else:
-        key_file = _KEY_PATH
-    key_file.write_bytes(key)
+
+    # 키체인에 저장 시도
+    _try_keyring_save(key)
+
+    # 파일에도 저장 (Docker/CLI fallback)
+    key_file = _resolve_key_file()
     try:
+        key_file.parent.mkdir(parents=True, exist_ok=True)
+        key_file.write_bytes(key)
         key_file.chmod(0o600)
     except OSError:
-        pass  # Windows에서는 chmod가 제한적
+        pass  # Windows chmod 또는 읽기 전용 파일시스템
     return key
 
 

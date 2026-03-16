@@ -8,7 +8,7 @@
 import asyncio
 import json
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from rich.console import Console
 from rich.panel import Panel
@@ -16,14 +16,18 @@ from rich.prompt import Prompt
 from rich.text import Text
 
 from src.config import KST, Config, get_data_path
+from src.service.scheduler import (
+    DEFAULT_SCHEDULE_HOURS,
+    check_auto_prerequisites,
+    fmt_remaining,
+    next_schedule_time,
+    parse_schedule_input,
+)
 
 console = Console()
 
 # 자동 모드 진행 상태 파일
 _PROGRESS_FILE = get_data_path("auto_progress.json")
-
-# 기본 스케줄 (KST 시각, 정각)
-_DEFAULT_SCHEDULE_HOURS = [9, 13, 18, 23]
 
 
 def _load_progress() -> set[str]:
@@ -49,45 +53,7 @@ def _save_progress(completed: set[str]) -> None:
 
 def _check_auto_prerequisites() -> list[str]:
     """자동 모드 필수 조건을 확인하고 미충족 항목 목록을 반환한다."""
-    issues = []
-    if Config.STT_ENABLED != "true":
-        issues.append("STT 미활성화")
-    if Config.AI_ENABLED != "true":
-        issues.append("AI 요약 미활성화")
-    if Config.TELEGRAM_ENABLED != "true":
-        issues.append("텔레그램 알림 미활성화")
-    if not Config.TELEGRAM_BOT_TOKEN or not Config.TELEGRAM_CHAT_ID:
-        issues.append("텔레그램 봇 토큰 또는 Chat ID 미설정")
-    api_key = Config.GOOGLE_API_KEY if Config.AI_AGENT == "gemini" else Config.OPENAI_API_KEY
-    if not api_key:
-        issues.append("AI API 키 미설정")
-    return issues
-
-
-def _next_schedule_time(schedule_hours: list[int]) -> datetime:
-    """다음 스케줄 실행 시각(KST)을 반환한다."""
-    now = datetime.now(KST)
-    today_schedules = [now.replace(hour=h, minute=0, second=0, microsecond=0) for h in sorted(schedule_hours)]
-    for t in today_schedules:
-        if t > now:
-            return t
-    # 오늘 스케줄이 모두 지난 경우 → 내일 첫 번째 스케줄
-    tomorrow = now + timedelta(days=1)
-    return tomorrow.replace(hour=sorted(schedule_hours)[0], minute=0, second=0, microsecond=0)
-
-
-def _fmt_remaining(target: datetime) -> str:
-    """현재 시각부터 target까지 남은 시간을 'H시간 M분 S초' 형식으로 반환한다."""
-    now = datetime.now(KST)
-    delta = target - now
-    total = max(0, int(delta.total_seconds()))
-    h, rem = divmod(total, 3600)
-    m, s = divmod(rem, 60)
-    if h > 0:
-        return f"{h}시간 {m}분 {s}초"
-    if m > 0:
-        return f"{m}분 {s}초"
-    return f"{s}초"
+    return check_auto_prerequisites(Config)
 
 
 def _configure_schedule() -> list[int]:
@@ -98,22 +64,17 @@ def _configure_schedule() -> list[int]:
     console.print()
     console.print("  [bold]자동 모드 스케줄 설정[/bold]")
     console.print()
-    console.print(f"  기본 스케줄: KST 기준 {', '.join(f'{h:02d}:00' for h in _DEFAULT_SCHEDULE_HOURS)}")
+    console.print(f"  기본 스케줄: KST 기준 {', '.join(f'{h:02d}:00' for h in DEFAULT_SCHEDULE_HOURS)}")
     console.print("  [dim]변경하려면 시간을 쉼표로 구분해 입력하세요. (예: 8,12,18,22)[/dim]")
     console.print("  [dim]Enter를 누르면 기본 스케줄을 사용합니다.[/dim]")
     console.print()
 
     while True:
         raw = Prompt.ask("  스케줄 입력", default="").strip()
-        if not raw:
-            return list(_DEFAULT_SCHEDULE_HOURS)
-        try:
-            hours = [int(h.strip()) for h in raw.split(",")]
-            if not hours or any(h < 0 or h > 23 for h in hours):
-                raise ValueError
-            return sorted(set(hours))
-        except ValueError:
-            console.print("  [red]0~23 사이의 숫자를 쉼표로 구분해 입력하세요.[/red]")
+        result = parse_schedule_input(raw)
+        if result is not None:
+            return result
+        console.print("  [red]0~23 사이의 숫자를 쉼표로 구분해 입력하세요.[/red]")
 
 
 async def run_auto_mode(scraper, courses, details) -> None:
@@ -191,7 +152,7 @@ async def run_auto_mode(scraper, courses, details) -> None:
                 # 첫 실행 시 대기 없이 바로 진행
                 run_now = False
             else:
-                next_time = _next_schedule_time(schedule_hours)
+                next_time = next_schedule_time(schedule_hours)
 
                 # 안내 줄 출력 (한 번만)
                 sys.stdout.write("  0 + Enter 로 종료\n")
@@ -202,7 +163,7 @@ async def run_auto_mode(scraper, courses, details) -> None:
                     now = datetime.now(KST)
                     if now >= next_time:
                         break
-                    remaining = _fmt_remaining(next_time)
+                    remaining = fmt_remaining(next_time)
                     line = (
                         f"  \033[1;32m● 자동 모드 동작 중\033[0m"
                         f"  \033[2m다음 체크  {next_time.strftime('%H:%M')} ({remaining} 후)\033[0m"

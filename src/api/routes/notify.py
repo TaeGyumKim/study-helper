@@ -1,0 +1,66 @@
+"""알림 관련 엔드포인트."""
+
+from __future__ import annotations
+
+from fastapi import APIRouter
+from pydantic import BaseModel
+
+from src.config import Config
+
+router = APIRouter()
+
+
+class DeadlineCheckRequest(BaseModel):
+    """마감 체크에 필요한 과목/강의 데이터는 Electron 측에서 제공한다."""
+
+    courses: list[dict]  # [{id, long_name, ...}, ...]
+    details: list[dict | None]  # [{weeks: [...], ...}, ...]
+
+
+@router.post("/deadline-check")
+def deadline_check():
+    """마감 임박 항목을 체크하고 텔레그램으로 알림을 전송한다.
+
+    NOTE: 현재는 코어 내부 데이터(scraper 결과)가 필요하므로,
+    Electron이 LMS 데이터를 수집한 후 Python 코어의
+    check_and_notify_deadlines를 직접 호출하는 구조로 변경 예정.
+    """
+    tg = Config.get_telegram_credentials()
+    if not tg:
+        return {"sent": 0, "message": "텔레그램 미설정"}
+    return {"sent": 0, "message": "Electron 측 데이터 연동 필요"}
+
+
+class NotifyRequest(BaseModel):
+    course_name: str
+    week_label: str = ""
+    lecture_title: str = ""
+    message_type: str  # "playback_complete" | "playback_error" | "download_error"
+    failed: bool = True
+
+
+@router.post("/telegram")
+def send_notification(body: NotifyRequest):
+    """텔레그램 알림을 전송한다."""
+    tg = Config.get_telegram_credentials()
+    if not tg:
+        return {"ok": False, "error": "텔레그램 미설정"}
+
+    token, chat_id = tg
+
+    if body.message_type == "playback_complete":
+        from src.notifier.telegram_notifier import notify_playback_complete
+
+        ok = notify_playback_complete(token, chat_id, body.course_name, body.week_label, body.lecture_title)
+    elif body.message_type == "playback_error":
+        from src.notifier.telegram_notifier import notify_playback_error
+
+        ok = notify_playback_error(token, chat_id, body.course_name, body.week_label, body.lecture_title, body.failed)
+    elif body.message_type == "download_error":
+        from src.notifier.telegram_notifier import notify_download_error
+
+        ok = notify_download_error(token, chat_id, body.course_name, body.week_label, body.lecture_title)
+    else:
+        return {"ok": False, "error": f"알 수 없는 메시지 타입: {body.message_type}"}
+
+    return {"ok": ok}

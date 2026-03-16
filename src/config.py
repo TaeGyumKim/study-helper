@@ -10,8 +10,9 @@ from src.crypto import decrypt, encrypt, is_encrypted
 # ── 공용 상수 ─────────────────────────────────────────────────
 KST = timezone(timedelta(hours=9))
 
-# .env 파일 로드 (없으면 환경변수만 사용)
-_env_path = Path(__file__).parent.parent / ".env"
+# .env 파일 경로: STUDY_HELPER_DATA_DIR이 설정되면 그 안의 .env를 사용
+_data_dir_env = os.getenv("STUDY_HELPER_DATA_DIR", "")
+_env_path = Path(_data_dir_env) / ".env" if _data_dir_env else Path(__file__).parent.parent / ".env"
 load_dotenv(_env_path)
 
 
@@ -58,8 +59,21 @@ APP_VERSION = _read_version()
 
 
 def get_data_path(filename: str) -> Path:
-    """데이터 파일 경로를 반환한다. Docker(/data) 또는 로컬(data/)."""
-    base = Path("/data") if Path("/data").exists() else Path("data")
+    """데이터 파일 경로를 반환한다.
+
+    우선순위:
+    1. STUDY_HELPER_DATA_DIR 환경변수 (Electron 앱이 설정)
+    2. Docker 환경: /data
+    3. 로컬: data/ (프로젝트 루트 기준)
+    """
+    env_dir = os.getenv("STUDY_HELPER_DATA_DIR", "")
+    if env_dir:
+        base = Path(env_dir)
+    elif Path("/data").exists():
+        base = Path("/data")
+    else:
+        base = Path("data")
+    base.mkdir(parents=True, exist_ok=True)
     return base / filename
 
 
