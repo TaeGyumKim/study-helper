@@ -31,6 +31,8 @@ def _load_progress() -> set[str]:
     try:
         if _PROGRESS_FILE.exists():
             return set(json.loads(_PROGRESS_FILE.read_text(encoding="utf-8")))
+    except json.JSONDecodeError:
+        print("  [경고] auto_progress.json 파싱 실패 — 초기화합니다.", file=sys.stderr)
     except Exception:
         pass
     return set()
@@ -41,8 +43,8 @@ def _save_progress(completed: set[str]) -> None:
     try:
         _PROGRESS_FILE.parent.mkdir(parents=True, exist_ok=True)
         _PROGRESS_FILE.write_text(json.dumps(sorted(completed)), encoding="utf-8")
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"  [경고] auto_progress.json 저장 실패: {e}", file=sys.stderr)
 
 
 def _check_auto_prerequisites() -> list[str]:

@@ -158,7 +158,7 @@ async def _check_update_compat():
     """버전 체크를 스레드풀에 위임하여 이벤트 루프 블로킹을 방지한다."""
     from src.config import APP_VERSION
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, check_update, APP_VERSION)
 
 

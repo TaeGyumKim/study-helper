@@ -24,7 +24,7 @@ _CHUNK_SIZE = 65536  # 64 KB
 def _sanitize_filename(name: str) -> str:
     """파일명에 사용 불가한 문자를 제거한다."""
     sanitized = re.sub(r'[<>:"/\\|?*]', "", name)
-    sanitized = sanitized.replace("..", "")  # 상위 디렉토리 순회 방지
+    sanitized = re.sub(r"\.{2,}", "", sanitized)  # 상위 디렉토리 순회 방지
     sanitized = sanitized.strip(" .")
     sanitized = re.sub(r"\s+", " ", sanitized)
     return sanitized or "lecture"

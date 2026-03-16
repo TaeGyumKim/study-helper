@@ -59,12 +59,9 @@ async def run_download(page, lec, course, audio_only: bool = False, both: bool =
 
     def _tg_error(msg_fn):
         """텔레그램 오류 알림을 전송한다 (설정된 경우에만)."""
-        if Config.TELEGRAM_ENABLED != "true":
-            return
-        tg_token = Config.TELEGRAM_BOT_TOKEN
-        tg_chat_id = Config.TELEGRAM_CHAT_ID
-        if tg_token and tg_chat_id:
-            msg_fn(tg_token, tg_chat_id)
+        creds = Config.get_telegram_credentials()
+        if creds:
+            msg_fn(creds[0], creds[1])
 
     # 1. learningx 타입 조기 감지 (구조적으로 다운로드 불가)
     if "learningx" in lec.full_url:
@@ -107,7 +104,7 @@ async def run_download(page, lec, course, audio_only: bool = False, both: bool =
     mp4_relpath = make_filepath(course.long_name, lec.week_label, lec.title)
     mp4_path = (Path(download_dir) / mp4_relpath).resolve()
     base_dir = Path(download_dir).resolve()
-    if not str(mp4_path).startswith(str(base_dir)):
+    if not mp4_path.is_relative_to(base_dir):
         console.print("  [bold red]오류:[/bold red] 잘못된 다운로드 경로가 감지되었습니다.")
         return False
 
