@@ -204,15 +204,26 @@ async def run_auto_mode(scraper, courses, details) -> None:
                 if dl_count > 0:
                     console.print(f"  [yellow]마감 임박 항목 {dl_count}건 — 텔레그램 알림 전송[/yellow]")
 
-            # 과목별 미시청 강의 수집 (이미 처리된 강의는 건너뜀)
+            # 과목별 미시청 강의 수집
+            # LMS에서 여전히 미시청인 강의는 progress에서 제거하여 재시도
             completed = _load_progress()
+            still_incomplete: set[str] = set()
             pending_list: list[tuple] = []  # (course, lec)
             for course, detail in zip(courses, details, strict=False):
                 if detail is None:
                     continue
                 for lec in detail.all_video_lectures:
-                    if lec.needs_watch and lec.full_url not in completed:
+                    if lec.needs_watch:
+                        if lec.full_url in completed:
+                            still_incomplete.add(lec.full_url)
                         pending_list.append((course, lec))
+
+            # LMS가 여전히 미완료로 보는 항목은 progress에서 제거
+            stale = completed & still_incomplete
+            if stale:
+                completed -= stale
+                _save_progress(completed)
+                console.print(f"  [dim]이전 처리 후 미완료 {len(stale)}건 재시도 대상[/dim]")
 
             if not pending_list:
                 console.print("  [dim]미시청 강의가 없습니다.[/dim]")
