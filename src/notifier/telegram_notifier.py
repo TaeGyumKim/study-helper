@@ -19,7 +19,10 @@ def _send_message(bot_token: str, chat_id: str, text: str) -> bool:
             timeout=10,
         )
         if resp.ok:
-            data = resp.json()
+            try:
+                data = resp.json()
+            except ValueError:
+                return False
             return data.get("ok", False)
         return False
     except Exception:
@@ -40,7 +43,10 @@ def _send_document(bot_token: str, chat_id: str, file_path: Path, caption: str =
                 timeout=60,
             )
         if resp.ok:
-            data = resp.json()
+            try:
+                data = resp.json()
+            except ValueError:
+                return False
             return data.get("ok", False)
         return False
     except Exception:
@@ -218,10 +224,16 @@ def verify_bot(bot_token: str, chat_id: str) -> tuple[bool, str]:
             timeout=10,
         )
         if not resp.ok:
-            data = resp.json()
-            desc = data.get("description", resp.text)
+            try:
+                data = resp.json()
+                desc = data.get("description", resp.text)
+            except ValueError:
+                desc = resp.text
             return False, f"봇 토큰 오류: {desc}"
-        bot_name = resp.json().get("result", {}).get("username", "")
+        try:
+            bot_name = resp.json().get("result", {}).get("username", "")
+        except ValueError:
+            return False, "봇 응답 파싱 실패"
     except Exception as e:
         return False, f"네트워크 오류: {e}"
 

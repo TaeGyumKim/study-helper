@@ -413,26 +413,52 @@ async def _play_via_learningx_api(
     api_url = f"https://canvas.ssu.ac.kr/learningx/api/v1/courses/{course_id}/attendance_items/{item_id}"
     log(f"  [LX] learningx item API 호출: {api_url}")
 
-    try:
-        result = await page.evaluate(f"""
-            async () => {{
-                try {{
-                    const resp = await fetch({json.dumps(api_url)});
-                    return {{s: resp.status, b: await resp.text()}};
-                }} catch(e) {{
-                    return {{s: -1, b: e.message}};
+    # 401 등 일시적 세션 오류에 대비해 최대 3회 재시도
+    body = ""
+    status = -1
+    for attempt in range(3):
+        try:
+            result = await page.evaluate(f"""
+                async () => {{
+                    try {{
+                        const resp = await fetch({json.dumps(api_url)});
+                        return {{s: resp.status, b: await resp.text()}};
+                    }} catch(e) {{
+                        return {{s: -1, b: e.message}};
+                    }}
                 }}
-            }}
-        """)
-        status = result.get("s")
-        body = result.get("b", "")
-        log(f"  [LX] API 응답: {status}")
-        if status != 200:
-            state.error = f"learningx API 오류: {status}"
+            """)
+            status = result.get("s")
+            body = result.get("b", "")
+            log(f"  [LX] API 응답: {status}")
+            if status == 200:
+                break
+            if status in (401, 403) and attempt < 2:
+                log(f"  [LX] {status} 응답 — {attempt + 1}/3회 재시도 (3초 대기)")
+                await asyncio.sleep(3)
+                # 세션 갱신 시도: 대시보드 방문 후 다시 강의 페이지로 복귀
+                try:
+                    await page.goto("https://canvas.ssu.ac.kr/", wait_until="domcontentloaded", timeout=15000)
+                    await asyncio.sleep(1)
+                    # course_id가 포함된 원래 강의 페이지로 복귀
+                    original_url = f"https://canvas.ssu.ac.kr/courses/{course_id}"
+                    await page.goto(original_url, wait_until="domcontentloaded", timeout=15000)
+                    await asyncio.sleep(1)
+                except Exception as nav_e:
+                    log(f"  [LX] 세션 갱신 중 오류: {nav_e}")
+                continue
+        except Exception as e:
+            if attempt < 2:
+                log(f"  [LX] API 호출 오류 — {attempt + 1}/3회 재시도: {e}")
+                await asyncio.sleep(3)
+                continue
+            log(f"  [LX] API 호출 최종 실패: {e}")
+            state.error = f"learningx API 호출 실패: {e}"
             return state
-    except Exception as e:
-        log(f"  [LX] API 호출 실패: {e}")
-        state.error = f"learningx API 호출 실패: {e}"
+
+    if status != 200:
+        log(f"  [LX] API 3회 재시도 모두 실패 ({status})")
+        state.error = f"learningx API 오류: {status}"
         return state
 
     try:
@@ -823,6 +849,32 @@ async def _play_lecture_inner(
     _using_fake_video: bool,
 ) -> PlaybackState:
     """play_lecture()의 실제 재생 로직. try-finally로 _cleanup() 보장을 위해 분리."""
+    # 0.5. 세션 유효성 체크 — 만료 시 대시보드 접근으로 리다이렉트 감지
+    log("[0.5] 세션 상태 확인...")
+    try:
+        await page.goto("https://canvas.ssu.ac.kr/", wait_until="domcontentloaded", timeout=15000)
+        if "login" in page.url:
+            log("    → 세션 만료 감지 — 재로그인 필요")
+            from src.auth.login import ensure_logged_in
+            from src.config import Config
+
+            user_id = Config.LMS_USER_ID
+            password = Config.LMS_PASSWORD
+            if user_id and password:
+                ok = await ensure_logged_in(page, user_id, password)
+                if not ok:
+                    state.error = "세션 만료 후 재로그인 실패"
+                    return state
+                log("    → 재로그인 완료")
+            else:
+                log("    → 저장된 자격증명 없음 — 재로그인 불가")
+                state.error = "세션 만료 — 저장된 자격증명 없음"
+                return state
+        else:
+            log("    → 세션 유효")
+    except Exception as e:
+        log(f"    → 세션 확인 오류 ({e}), 계속 시도...")
+
     await page.goto(lecture_url, wait_until="domcontentloaded", timeout=60000)
     log(f"    → 현재 URL: {page.url}")
 
@@ -840,7 +892,22 @@ async def _play_lecture_inner(
         tool_frame = page.frame(name="tool_content")
         if tool_frame and "learningx" in tool_frame.url:
             log(f"    → learningx 플레이어 감지: {tool_frame.url}")
-            return await _play_via_learningx_api(page, tool_frame.url, on_progress, log, fallback_duration)
+            lx_state = await _play_via_learningx_api(page, tool_frame.url, on_progress, log, fallback_duration)
+            # learningx API 실패 시 (401 등) 페이지 재로드 후 commons frame 재탐색
+            if lx_state.error and not lx_state.ended:
+                log(f"    → learningx API 실패 ({lx_state.error}), 페이지 재로드 후 commons frame 재탐색...")
+                try:
+                    await page.goto(lecture_url, wait_until="domcontentloaded", timeout=60000)
+                    await asyncio.sleep(3)
+                    retry_frame = await _find_player_frame(page)
+                    if retry_frame:
+                        log(f"    → commons frame 발견: {retry_frame.url}")
+                        return await _play_via_progress_api(
+                            page, retry_frame.url, on_progress, log, fallback_duration
+                        )
+                except Exception as retry_e:
+                    log(f"    → 재로드 후 재탐색 실패: {retry_e}")
+            return lx_state
 
         state.error = "비디오 프레임을 찾지 못했습니다."
         return state

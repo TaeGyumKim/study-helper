@@ -245,8 +245,9 @@ async def download_video_with_browser(
             return save_path.resolve()
         except Exception as e:
             last_error = e
-            # 부분 파일은 유지 — 다음 시도에서 Range 헤더로 이어받기
+            # 이어받기 실패(206에서 오류) 시 부분 파일 삭제 후 처음부터
             if attempt < _MAX_RETRIES:
+                _remove_partial(save_path)
                 time.sleep(2**attempt)
     _remove_partial(save_path)
     raise last_error
@@ -313,16 +314,22 @@ def _stream_download(
 
     response = requests.get(url, stream=True, timeout=_TIMEOUT, cookies=cookies, headers=headers)
 
+    def _safe_content_length(resp) -> int:
+        try:
+            return int(resp.headers.get("content-length", 0))
+        except (ValueError, TypeError):
+            return 0
+
     if response.status_code == 206:
         # 서버가 Range 지원 → 이어받기
         mode = "ab"
-        total = existing_size + int(response.headers.get("content-length", 0))
+        total = existing_size + _safe_content_length(response)
         downloaded = existing_size
     elif response.status_code == 200:
         # 서버가 Range 미지원 또는 첫 시도 → 처음부터
         response.raise_for_status()
         mode = "wb"
-        total = int(response.headers.get("content-length", 0))
+        total = _safe_content_length(response)
         downloaded = 0
     else:
         response.raise_for_status()

@@ -291,6 +291,19 @@ async def _process_lecture(scraper, course, lec, stop_event: asyncio.Event) -> b
     _log.info("처리 시작: %s", label)
     console.print(f"  [{now_str}] [bold]{label}[/bold] 처리 중...")
 
+    # ── 세션 유효성 체크 ─────────────────────────────────────────
+    try:
+        page = scraper._page
+        await page.goto("https://canvas.ssu.ac.kr/", wait_until="domcontentloaded", timeout=15000)
+        if "login" in page.url:
+            _log.info("세션 만료 감지 — 재로그인 시도")
+            console.print("  [dim]  → 세션 만료 감지, 재로그인 중...[/dim]")
+            await scraper._ensure_session()
+            _log.info("재로그인 완료")
+            console.print("  [dim]  → 재로그인 완료[/dim]")
+    except Exception as e:
+        _log.warning("세션 확인 오류: %s (계속 시도)", e)
+
     # ── 재생 ──────────────────────────────────────────────────────
     console.print("  [dim]  → 재생 중...[/dim]")
     try:
