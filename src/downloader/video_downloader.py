@@ -5,11 +5,13 @@ Playwright로 LMS 강의 페이지에서 video URL을 추출한 뒤,
 requests로 청크 스트리밍 다운로드한다.
 """
 
+import asyncio
 import re
 import time
 from collections.abc import Callable
 from http.client import IncompleteRead
 from pathlib import Path
+from urllib.parse import urlparse
 
 import requests
 from playwright.async_api import Page
@@ -19,6 +21,20 @@ from src.player.background_player import _click_play, _dismiss_dialog, _find_pla
 _MAX_RETRIES = 3
 _TIMEOUT = (10, 60)  # (connect, read) seconds
 _CHUNK_SIZE = 65536  # 64 KB
+
+# 다운로드 허용 도메인 (SSRF 방어)
+_ALLOWED_SCHEMES = {"https", "http"}
+_ALLOWED_HOSTS_SUFFIX = (".ssu.ac.kr", ".commonscdn.net")
+
+
+def _validate_media_url(url: str) -> None:
+    """다운로드 URL의 프로토콜과 호스트를 검증한다. 허용 외 URL이면 ValueError."""
+    parsed = urlparse(url)
+    if parsed.scheme not in _ALLOWED_SCHEMES:
+        raise ValueError(f"허용되지 않는 프로토콜: {parsed.scheme}")
+    hostname = parsed.hostname or ""
+    if not any(hostname.endswith(suffix) for suffix in _ALLOWED_HOSTS_SUFFIX):
+        raise ValueError(f"허용되지 않는 호스트: {hostname}")
 
 
 def _sanitize_filename(name: str) -> str:
@@ -37,7 +53,6 @@ async def extract_video_url(page: Page, lecture_url: str) -> str | None:
     Plan A: video 태그 src 폴링 (일반 타입)
     Plan B: Network 요청 가로채기 — mp4 URL이 포함된 요청 캡처 (readystream 등)
     """
-    import asyncio
 
     captured: dict = {"url": None}
 
@@ -63,7 +78,10 @@ async def extract_video_url(page: Page, lecture_url: str) -> str | None:
                     import xml.etree.ElementTree as ET
 
                     body = await response.text()
-                    root = ET.fromstring(body)
+                    # XXE 방어: DTD/외부 엔티티 처리 비활성화
+                    parser = ET.XMLParser()
+                    parser.feed(body)
+                    root = parser.close()
                     # desktop > html5 > media_uri (progressive) 우선
                     # mobile > html5 > media_uri fallback
                     media_uri = None
@@ -231,6 +249,7 @@ async def download_video_with_browser(
     on_progress: Callable[[int, int], None] | None = None,
 ) -> Path:
     """Playwright 브라우저 컨텍스트의 쿠키를 사용해 영상을 스트리밍 다운로드한다."""
+    _validate_media_url(url)
     save_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Playwright 컨텍스트에서 쿠키 추출 → requests에 전달 (CDN 인증 자동 처리)
@@ -238,7 +257,7 @@ async def download_video_with_browser(
     cookies = {c["name"]: c["value"] for c in context_cookies}
 
     referer = "https://commons.ssu.ac.kr/"
-    last_error = None
+    last_error: Exception | None = None
     for attempt in range(1, _MAX_RETRIES + 1):
         try:
             _stream_download(url, save_path, on_progress, attempt=attempt, cookies=cookies, referer=referer)
@@ -250,6 +269,8 @@ async def download_video_with_browser(
                 _remove_partial(save_path)
                 time.sleep(2**attempt)
     _remove_partial(save_path)
+    if last_error is None:
+        raise RuntimeError("다운로드 실패: 알 수 없는 오류")
     raise last_error
 
 
@@ -274,9 +295,10 @@ def download_video(
     Raises:
         Exception: 최대 재시도 후에도 실패한 경우
     """
+    _validate_media_url(url)
     save_path.parent.mkdir(parents=True, exist_ok=True)
 
-    last_error = None
+    last_error: Exception | None = None
     for attempt in range(1, _MAX_RETRIES + 1):
         try:
             _stream_download(url, save_path, on_progress, attempt, cookies=cookies, referer=referer)
@@ -292,6 +314,8 @@ def download_video(
             _remove_partial(save_path)
             break
 
+    if last_error is None:
+        raise RuntimeError("다운로드 실패: 알 수 없는 오류")
     raise last_error
 
 

@@ -31,6 +31,9 @@ _log = get_logger("auto")
 # 자동 모드 진행 상태 파일
 _PROGRESS_FILE = get_data_path("auto_progress.json")
 
+# 재생 재시도 설정
+_MAX_PLAY_RETRIES = 3
+
 
 def _load_progress() -> set[str]:
     """처리 완료된 강의 URL 목록을 로드한다."""
@@ -38,7 +41,7 @@ def _load_progress() -> set[str]:
         if _PROGRESS_FILE.exists():
             return set(json.loads(_PROGRESS_FILE.read_text(encoding="utf-8")))
     except json.JSONDecodeError:
-        print("  [경고] auto_progress.json 파싱 실패 — 초기화합니다.", file=sys.stderr)
+        _log.warning("auto_progress.json 파싱 실패 — 초기화합니다.")
     except Exception:
         pass
     return set()
@@ -50,7 +53,7 @@ def _save_progress(completed: set[str]) -> None:
         _PROGRESS_FILE.parent.mkdir(parents=True, exist_ok=True)
         _PROGRESS_FILE.write_text(json.dumps(sorted(completed)), encoding="utf-8")
     except Exception as e:
-        print(f"  [경고] auto_progress.json 저장 실패: {e}", file=sys.stderr)
+        _log.warning("auto_progress.json 저장 실패: %s", e)
 
 
 def _check_auto_prerequisites() -> list[str]:
@@ -136,7 +139,7 @@ async def run_auto_mode(scraper, courses, details) -> None:
 
     async def _input_listener():
         """별도 태스크로 사용자 입력을 감시한다. '0' + Enter로 종료."""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         while not stop_event.is_set():
             try:
                 line = await loop.run_in_executor(None, sys.stdin.readline)
@@ -233,7 +236,7 @@ async def run_auto_mode(scraper, courses, details) -> None:
 
             # progress에 없는 (아직 미처리) 강의만 대상
             pending_list = [
-                (c, l) for c, l in all_needs_watch if l.full_url not in completed
+                (c, lec) for c, lec in all_needs_watch if lec.full_url not in completed
             ]
 
             stats_msg = (
@@ -305,7 +308,6 @@ async def _process_lecture(scraper, course, lec, stop_event: asyncio.Event) -> b
         _log.warning("세션 확인 오류: %s (계속 시도)", e)
 
     # ── 재생 (최대 3회 재시도) ──────────────────────────────────────
-    _MAX_PLAY_RETRIES = 3
     play_success = False
     last_err_msg = ""
     for play_attempt in range(1, _MAX_PLAY_RETRIES + 1):

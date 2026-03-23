@@ -6,11 +6,14 @@
 
 from pathlib import Path
 
+import requests
+
+# Telegram 메시지 최대 길이 (API 명세)
+_TELEGRAM_MAX_MESSAGE_LEN = 4096
+
 
 def _send_message(bot_token: str, chat_id: str, text: str) -> bool:
     """텔레그램 메시지를 전송한다. 응답 body의 ok 필드로 성공 여부를 판정한다."""
-    import requests
-
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     try:
         resp = requests.post(
@@ -31,8 +34,6 @@ def _send_message(bot_token: str, chat_id: str, text: str) -> bool:
 
 def _send_document(bot_token: str, chat_id: str, file_path: Path, caption: str = "") -> bool:
     """텔레그램 파일을 전송한다. 응답 body의 ok 필드로 성공 여부를 판정한다."""
-    import requests
-
     url = f"https://api.telegram.org/bot{bot_token}/sendDocument"
     try:
         with open(file_path, "rb") as f:
@@ -157,8 +158,7 @@ def notify_summary_complete(
     text = f"[알림] {label}의 요약 내용을 다음과 같이 제공해드립니다.\n\n{summary_text}"
 
     # 요약 내용 텍스트 메시지 전송 (4096자 초과 시 잘라서 전송)
-    _MAX = 4096
-    chunks = [text[i : i + _MAX] for i in range(0, len(text), _MAX)]
+    chunks = [text[i : i + _TELEGRAM_MAX_MESSAGE_LEN] for i in range(0, len(text), _TELEGRAM_MAX_MESSAGE_LEN)]
     msg_ok = all(_send_message(bot_token, chat_id, chunk) for chunk in chunks)
 
     # 요약 파일 첨부 전송
@@ -167,10 +167,10 @@ def notify_summary_complete(
     success = msg_ok and file_ok
 
     if success and auto_delete_files:
-        for path in auto_delete_files:
+        for p in auto_delete_files:
             try:
-                if path and Path(path).exists():
-                    Path(path).unlink()
+                if p and p.is_file():
+                    p.unlink()
             except Exception:
                 pass
 
