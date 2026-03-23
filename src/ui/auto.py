@@ -304,24 +304,51 @@ async def _process_lecture(scraper, course, lec, stop_event: asyncio.Event) -> b
     except Exception as e:
         _log.warning("세션 확인 오류: %s (계속 시도)", e)
 
-    # ── 재생 ──────────────────────────────────────────────────────
-    console.print("  [dim]  → 재생 중...[/dim]")
-    try:
-        success, has_error = await run_player(scraper._page, lec)
-        if not success:
-            err_msg = "재생 오류" if has_error else "재생 미완료"
-            _log.warning("재생 실패: %s — %s", label, err_msg)
-            console.print(f"  [yellow]  → {err_msg}: {label}[/yellow]")
-            _tg_error_notify(course, lec, err_msg)
+    # ── 재생 (최대 3회 재시도) ──────────────────────────────────────
+    _MAX_PLAY_RETRIES = 3
+    play_success = False
+    last_err_msg = ""
+    for play_attempt in range(1, _MAX_PLAY_RETRIES + 1):
+        if stop_event.is_set():
             return False
-        lec.completion = "completed"
-        _log.info("재생 완료: %s", label)
-        console.print("  [dim]  → 재생 완료[/dim]")
-    except Exception as e:
-        _log.error("재생 예외: %s — %s", label, e, exc_info=True)
-        console.print(f"  [red]  → 재생 실패: {e}[/red]")
-        _tg_error_notify(course, lec, f"재생 실패: {e}")
+        if play_attempt > 1:
+            wait_sec = 5 * play_attempt  # 10s, 15s
+            _log.info("재생 재시도 %d/%d (%d초 대기): %s", play_attempt, _MAX_PLAY_RETRIES, wait_sec, label)
+            console.print(f"  [dim]  → 재생 재시도 {play_attempt}/{_MAX_PLAY_RETRIES} ({wait_sec}초 대기)...[/dim]")
+            await asyncio.sleep(wait_sec)
+            # 재시도 전 세션 갱신
+            try:
+                page = scraper._page
+                await page.goto("https://canvas.ssu.ac.kr/", wait_until="domcontentloaded", timeout=15000)
+                if "login" in page.url:
+                    await scraper._ensure_session()
+                    console.print("  [dim]  → 재로그인 완료[/dim]")
+            except Exception:
+                pass
+        else:
+            console.print("  [dim]  → 재생 중...[/dim]")
+
+        try:
+            success, has_error = await run_player(scraper._page, lec)
+            if success:
+                play_success = True
+                break
+            last_err_msg = "재생 오류" if has_error else "재생 미완료"
+            _log.warning("재생 실패 (%d/%d): %s — %s", play_attempt, _MAX_PLAY_RETRIES, label, last_err_msg)
+            console.print(f"  [yellow]  → {last_err_msg} ({play_attempt}/{_MAX_PLAY_RETRIES})[/yellow]")
+        except Exception as e:
+            last_err_msg = f"재생 실패: {e}"
+            _log.error("재생 예외 (%d/%d): %s — %s", play_attempt, _MAX_PLAY_RETRIES, label, e, exc_info=True)
+            console.print(f"  [red]  → {last_err_msg} ({play_attempt}/{_MAX_PLAY_RETRIES})[/red]")
+
+    if not play_success:
+        _log.warning("재생 최종 실패: %s — %s", label, last_err_msg)
+        _tg_error_notify(course, lec, f"{last_err_msg} ({_MAX_PLAY_RETRIES}회 재시도 후 실패)")
         return False
+
+    lec.completion = "completed"
+    _log.info("재생 완료: %s", label)
+    console.print("  [dim]  → 재생 완료[/dim]")
 
     if stop_event.is_set():
         return False
