@@ -2,6 +2,8 @@
 
 AI 요약 기능을 사용하려면 Google Gemini API 키가 필요합니다.
 
+> **참고**: "Gemini API 키"와 "Google API 키"는 같은 것입니다. Gemini는 Google이 만든 AI이고, Google AI Studio에서 발급받습니다.
+
 ---
 
 ## 1. Google AI Studio 접속

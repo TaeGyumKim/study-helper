@@ -198,13 +198,16 @@ docker compose run --rm study-helper
 
 강의 내용을 자동으로 요약해줍니다.
 
+> **Gemini API = Google API 입니다.** Gemini는 Google이 만든 AI 모델이고, Google AI Studio에서 발급받는 API 키를 사용합니다. "Google API 키"와 "Gemini API 키"는 **같은 것**입니다. 헷갈리지 마세요!
+
 1. [Gemini API 키 발급 가이드](gemini-api-key.md)를 따라 API 키를 발급받습니다
+   - 간단 요약: https://aistudio.google.com 접속 → 로그인 → "Get API key" → "Create API key" → 복사
 2. 설정 화면에서 아래 항목을 설정:
    - AI 요약: **사용**
    - AI 에이전트: **gemini**
-   - API 키: 발급받은 키 붙여넣기
+   - API 키: 발급받은 키 붙여넣기 (`AIzaSy...`로 시작하는 긴 문자열)
 
-> Gemini API는 무료 티어가 있어서 개인 학습 용도로는 충분합니다.
+> Gemini API는 무료 티어가 있어서 개인 학습 용도로는 돈이 들지 않습니다.
 
 ### 텔레그램 알림 설정
 
@@ -483,7 +486,7 @@ study-helper/
 3. 네트워크 문제
 
 **해결**:
-1. https://aistudio.google.com 에서 API 키가 유효한지 확인
+1. [Google AI Studio](https://aistudio.google.com)에서 API 키가 유효한지 확인 (Gemini API 키 = Google API 키, 같은 것입니다)
 2. 무료 한도는 보통 분당 15건 — 잠시 기다렸다가 다시 시도
 3. 키를 새로 발급받아서 설정에 다시 입력
 
