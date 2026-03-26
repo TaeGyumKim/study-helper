@@ -229,6 +229,67 @@ docker compose run --rm study-helper
 
 다운로드된 파일은 `study-helper/data/downloads/과목명/N주차/` 폴더에 저장됩니다.
 
+### .env 파일 직접 편집하기 (선택)
+
+프로그램 안의 `setting` 화면 대신 `.env` 파일을 직접 열어서 설정할 수도 있습니다.
+**프로그램이 실행되지 않는 상황**에서 설정을 바꾸고 싶을 때 유용합니다.
+
+#### .env 파일 여는 법
+
+| OS | 방법 |
+|----|------|
+| Windows | 탐색기에서 `study-helper` 폴더 열기 → `.env` 파일을 **메모장**으로 열기 |
+| Mac | 터미널에서 `open -a TextEdit .env` 입력 |
+
+> `.env` 파일이 안 보이면 **숨김 파일 표시**를 켜야 합니다.
+> - Windows: 탐색기 → 보기 → "숨긴 항목" 체크
+> - Mac: `Cmd + Shift + .`
+
+#### .env 파일 설정 예시
+
+아래는 **자동 모드까지 전부 사용**하는 완전체 설정 예시입니다.
+`=` 뒤에 값을 채워넣으면 됩니다. 따옴표(`"`, `'`)는 **붙이지 마세요**.
+
+```ini
+# ── 계정 (프로그램 실행 시 입력하면 자동 저장됨) ─────────────
+LMS_USER_ID=20241234
+LMS_PASSWORD=mypassword123
+
+# ── 다운로드 ────────────────────────────────────────────────
+DOWNLOAD_DIR=              ← 비워두면 기본 폴더 사용 (Docker: /data/downloads)
+DOWNLOAD_RULE=both         ← video / audio / both 중 택 1
+
+# ── STT (음성→텍스트 변환) ──────────────────────────────────
+STT_ENABLED=true           ← true 또는 false
+WHISPER_MODEL=base         ← tiny / base / small / medium / large
+STT_LANGUAGE=ko            ← ko(한국어) / en(영어) / 비우면 자동 감지
+
+# ── AI 요약 ─────────────────────────────────────────────────
+AI_ENABLED=true            ← true 또는 false
+AI_AGENT=gemini            ← gemini 또는 openai
+GEMINI_MODEL=gemini-2.5-flash
+GOOGLE_API_KEY=AIzaSy...   ← Google AI Studio에서 발급받은 키 (= Gemini API 키)
+OPENAI_API_KEY=            ← OpenAI 사용 시에만 입력
+SUMMARY_PROMPT_EXTRA=      ← 추가 요약 지시사항 (비워두면 기본값)
+
+# ── 텔레그램 알림 ───────────────────────────────────────────
+TELEGRAM_ENABLED=true      ← true 또는 false
+TELEGRAM_BOT_TOKEN=1234567890:ABCdefGHI...  ← BotFather에서 발급
+TELEGRAM_CHAT_ID=123456789                  ← @userinfobot에서 확인
+TELEGRAM_AUTO_DELETE=false ← true: 요약 전송 후 파일 자동 삭제
+```
+
+#### 자주 하는 실수
+
+| 실수 | 올바른 예 |
+|------|-----------|
+| 값에 따옴표 붙이기 | `GOOGLE_API_KEY=AIzaSy...` (O) / `GOOGLE_API_KEY="AIzaSy..."` (X) |
+| `=` 앞뒤에 공백 넣기 | `AI_ENABLED=true` (O) / `AI_ENABLED = true` (X) |
+| 줄 끝에 주석 달기 | 줄 끝 `← 설명` 부분은 **실제 파일에 넣지 마세요** (위는 설명용) |
+| 빈 줄 삭제 | 빈 줄이 있어도 상관없습니다 |
+
+> `.env` 파일을 수정한 후에는 프로그램을 **재시작**해야 반영됩니다.
+
 ---
 
 ## 6단계: 자동 모드 (핵심 기능)
