@@ -98,45 +98,46 @@ async def run():
             console.print(f"  [yellow]마감 임박 항목 {deadline_count}건 — 텔레그램 알림 전송 완료[/yellow]")
 
     # ── 4. 과목 선택 루프 ────────────────────────────────────────
-    while True:
-        selected = show_course_list(courses, details, user_id=user_id, latest_version=latest_version)
-        if selected is None:
-            console.print("\n  [dim]종료합니다.[/dim]\n")
-            break
+    try:
+        while True:
+            selected = show_course_list(courses, details, user_id=user_id, latest_version=latest_version)
+            if selected is None:
+                console.print("\n  [dim]종료합니다.[/dim]\n")
+                break
 
-        if selected is _AUTO_SENTINEL:
-            from src.ui.auto import run_auto_mode
+            if selected is _AUTO_SENTINEL:
+                from src.ui.auto import run_auto_mode
 
-            await run_auto_mode(scraper, courses, details)
-            continue
+                await run_auto_mode(scraper, courses, details)
+                continue
 
-        idx = courses.index(selected)
-        detail = details[idx]
-        if detail is None:
-            console.print("\n  [red]강의 정보를 불러오지 못했습니다.[/red]\n")
-            continue
+            idx = courses.index(selected)
+            detail = details[idx]
+            if detail is None:
+                console.print("\n  [red]강의 정보를 불러오지 못했습니다.[/red]\n")
+                continue
 
-        result = show_week_list(selected, detail)
-        if result is None:
-            continue
+            result = show_week_list(selected, detail)
+            if result is None:
+                continue
 
-        lec, action = result
-        if action == LectureAction.PLAY:
-            success, has_error = await run_player(scraper.page, lec, debug=False)
-            if success:
-                lec.completion = "completed"
-                _tg_notify_playback_complete(selected.long_name, lec)
-            else:
-                _tg_notify_playback_error(selected.long_name, lec, failed=has_error)
-            input("\n  Enter를 눌러 계속...")
-        elif action == LectureAction.DOWNLOAD:
-            rule = Config.DOWNLOAD_RULE or "both"
-            audio_only = rule == "audio"
-            both = rule == "both"
-            await run_download(scraper.page, lec, selected, audio_only=audio_only, both=both)
-            input("\n  Enter를 눌러 계속...")
-
-    await scraper.close()
+            lec, action = result
+            if action == LectureAction.PLAY:
+                success, has_error = await run_player(scraper.page, lec, debug=False)
+                if success:
+                    lec.completion = "completed"
+                    _tg_notify_playback_complete(selected.long_name, lec)
+                else:
+                    _tg_notify_playback_error(selected.long_name, lec, failed=has_error)
+                input("\n  Enter를 눌러 계속...")
+            elif action == LectureAction.DOWNLOAD:
+                rule = Config.DOWNLOAD_RULE or "both"
+                audio_only = rule == "audio"
+                both = rule == "both"
+                await run_download(scraper.page, lec, selected, audio_only=audio_only, both=both)
+                input("\n  Enter를 눌러 계속...")
+    finally:
+        await scraper.close()
 
 
 async def _try_login(user_id: str, password: str) -> CourseScraper | None:
@@ -240,7 +241,10 @@ def _tg_notify_playback_error(course_name: str, lec, failed: bool = True) -> Non
 
 
 def main():
-    asyncio.run(run())
+    try:
+        asyncio.run(run())
+    except KeyboardInterrupt:
+        console.print("\n  [dim]Ctrl+C — 종료합니다.[/dim]\n")
 
 
 if __name__ == "__main__":
