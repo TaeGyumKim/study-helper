@@ -21,13 +21,16 @@ def _send_message(bot_token: str, chat_id: str, text: str) -> bool:
             json={"chat_id": chat_id, "text": text},
             timeout=10,
         )
-        if resp.ok:
-            try:
-                data = resp.json()
-            except ValueError:
-                return False
-            return data.get("ok", False)
-        return False
+        try:
+            if resp.ok:
+                try:
+                    data = resp.json()
+                except ValueError:
+                    return False
+                return data.get("ok", False)
+            return False
+        finally:
+            resp.close()
     except Exception:
         return False
 
@@ -43,13 +46,16 @@ def _send_document(bot_token: str, chat_id: str, file_path: Path, caption: str =
                 files={"document": (file_path.name, f)},
                 timeout=60,
             )
-        if resp.ok:
-            try:
-                data = resp.json()
-            except ValueError:
-                return False
-            return data.get("ok", False)
-        return False
+        try:
+            if resp.ok:
+                try:
+                    data = resp.json()
+                except ValueError:
+                    return False
+                return data.get("ok", False)
+            return False
+        finally:
+            resp.close()
     except Exception:
         return False
 

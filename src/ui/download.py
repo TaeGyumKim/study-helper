@@ -217,7 +217,7 @@ async def run_download(page, lec, course, audio_only: bool = False, both: bool =
                 with Live(spinner_progress, console=console, refresh_per_second=8):
                     with warnings.catch_warnings():
                         warnings.simplefilter("ignore")
-                        loop = asyncio.get_event_loop()
+                        loop = asyncio.get_running_loop()
                         with ThreadPoolExecutor() as pool:
                             summary_path = await loop.run_in_executor(
                                 pool,

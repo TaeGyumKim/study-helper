@@ -95,37 +95,41 @@ class CourseScraper:
             permissions=["camera", "microphone", "geolocation"],
             viewport={"width": 1280, "height": 720},
         )
-        await context.add_init_script("""
-            // webdriver 속성 제거
-            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+        try:
+            await context.add_init_script("""
+                // webdriver 속성 제거
+                Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
 
-            // chrome 런타임 위장
-            window.chrome = {
-                runtime: {},
-                loadTimes: function() {},
-                csi: function() {},
-                app: {}
-            };
+                // chrome 런타임 위장
+                window.chrome = {
+                    runtime: {},
+                    loadTimes: function() {},
+                    csi: function() {},
+                    app: {}
+                };
 
-            // plugins 위장 (headless에서는 빈 배열)
-            Object.defineProperty(navigator, 'plugins', {
-                get: () => [1, 2, 3, 4, 5],
-            });
+                // plugins 위장 (headless에서는 빈 배열)
+                Object.defineProperty(navigator, 'plugins', {
+                    get: () => [1, 2, 3, 4, 5],
+                });
 
-            // languages 위장
-            Object.defineProperty(navigator, 'languages', {
-                get: () => ['ko-KR', 'ko', 'en-US', 'en'],
-            });
+                // languages 위장
+                Object.defineProperty(navigator, 'languages', {
+                    get: () => ['ko-KR', 'ko', 'en-US', 'en'],
+                });
 
-            // permissions 위장
-            const originalQuery = window.navigator.permissions.query;
-            window.navigator.permissions.query = (parameters) => (
-                parameters.name === 'notifications'
-                    ? Promise.resolve({ state: Notification.permission })
-                    : originalQuery(parameters)
-            );
-        """)
-        page = await context.new_page()
+                // permissions 위장
+                const originalQuery = window.navigator.permissions.query;
+                window.navigator.permissions.query = (parameters) => (
+                    parameters.name === 'notifications'
+                        ? Promise.resolve({ state: Notification.permission })
+                        : originalQuery(parameters)
+                );
+            """)
+            page = await context.new_page()
+        except Exception:
+            await context.close()
+            raise
         self._context = context
         return page, browser
 

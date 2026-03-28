@@ -58,6 +58,7 @@ async def extract_video_url(page: Page, lecture_url: str) -> str | None:
     """
 
     captured: dict = {"url": None}
+    _bg_tasks: list = []
 
     exclude_patterns = ("preloader.mp4", "preview.mp4", "thumbnail.mp4")
 
@@ -123,6 +124,7 @@ async def extract_video_url(page: Page, lecture_url: str) -> str | None:
 
             task = asyncio.ensure_future(_parse_content_php())
             task.add_done_callback(lambda t: t.exception() if not t.cancelled() and t.exception() else None)
+            _bg_tasks.append(task)
 
     page.on("request", _on_request)
     page.on("response", _on_response)
@@ -244,6 +246,12 @@ async def extract_video_url(page: Page, lecture_url: str) -> str | None:
     finally:
         page.remove_listener("request", _on_request)
         page.remove_listener("response", _on_response)
+        # fire-and-forget 파싱 태스크 정리
+        for t in _bg_tasks:
+            if not t.done():
+                t.cancel()
+        if _bg_tasks:
+            await asyncio.gather(*_bg_tasks, return_exceptions=True)
 
 
 async def download_video_with_browser(
@@ -355,28 +363,31 @@ def _stream_download(
         except (ValueError, TypeError):
             return 0
 
-    if response.status_code == 206:
-        # 서버가 Range 지원 → 이어받기
-        mode = "ab"
-        total = existing_size + _safe_content_length(response)
-        downloaded = existing_size
-    elif response.status_code == 200:
-        # 서버가 Range 미지원 또는 첫 시도 → 처음부터
-        response.raise_for_status()
-        mode = "wb"
-        total = _safe_content_length(response)
-        downloaded = 0
-    else:
-        response.raise_for_status()
-        return
+    try:
+        if response.status_code == 206:
+            # 서버가 Range 지원 → 이어받기
+            mode = "ab"
+            total = existing_size + _safe_content_length(response)
+            downloaded = existing_size
+        elif response.status_code == 200:
+            # 서버가 Range 미지원 또는 첫 시도 → 처음부터
+            response.raise_for_status()
+            mode = "wb"
+            total = _safe_content_length(response)
+            downloaded = 0
+        else:
+            response.raise_for_status()
+            return
 
-    with open(save_path, mode) as f:
-        for chunk in response.iter_content(chunk_size=_CHUNK_SIZE):
-            if chunk:
-                f.write(chunk)
-                downloaded += len(chunk)
-                if on_progress and total > 0:
-                    on_progress(downloaded, total)
+        with open(save_path, mode) as f:
+            for chunk in response.iter_content(chunk_size=_CHUNK_SIZE):
+                if chunk:
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    if on_progress and total > 0:
+                        on_progress(downloaded, total)
+    finally:
+        response.close()
 
 
 def _remove_partial(path: Path):
