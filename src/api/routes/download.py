@@ -90,11 +90,20 @@ async def transcribe(body: TranscribeRequest):
     """음성을 텍스트로 변환한다 (STT)."""
     audio = _validate_path_in_download_dir(body.audio_path)
     loop = asyncio.get_running_loop()
-    txt_path = await loop.run_in_executor(
-        None,
-        lambda: transcribe_audio(audio, model_size=body.model_size, language=body.language),
-    )
-    return {"txt_path": str(txt_path)}
+    try:
+        txt_path = await loop.run_in_executor(
+            None,
+            lambda: transcribe_audio(audio, model_size=body.model_size, language=body.language),
+        )
+        return {"txt_path": str(txt_path)}
+    finally:
+        # STT 모델 메모리 해제 (수백 MB) — API 서버 장시간 운영 시 메모리 누적 방지
+        try:
+            from src.stt.transcriber import unload_model
+
+            await loop.run_in_executor(None, unload_model)
+        except Exception:
+            pass
 
 
 @router.post("/summarize")

@@ -368,6 +368,7 @@ async def _report_completion(
                 headers={"Referer": "https://commons.ssu.ac.kr/"},
             )
             body = await response.text()
+            await response.dispose()
             log(f"  [완료 보고] request.get 응답: {response.status}  body={body[:200]!r}")
             if '"result":true' in body:
                 return
@@ -607,6 +608,7 @@ async def _play_via_progress_api(
                             headers={"Referer": "https://commons.ssu.ac.kr/"},
                         )
                         body = await response.text()
+                        await response.dispose()
                         log(f"  [API] 응답 (fallback): {response.status}  body={body[:200]!r}")
                 else:
                     response = await page.request.get(
@@ -614,6 +616,7 @@ async def _play_via_progress_api(
                         headers={"Referer": "https://commons.ssu.ac.kr/"},
                     )
                     body = await response.text()
+                    await response.dispose()
                     log(f"  [API] 응답: {response.status}  body={body[:200]!r}")
                 next_report = current + report_interval
             except Exception as e:
@@ -741,6 +744,8 @@ async def play_lecture(
             # 그 요청을 위 route가 VP8 WebM으로 대체한다.
             await page.add_init_script("""
                 (function() {
+                    if (window.__h264OverrideApplied) return;
+                    window.__h264OverrideApplied = true;
                     if (window.MediaSource && MediaSource.isTypeSupported) {
                         var _origMSE = MediaSource.isTypeSupported.bind(MediaSource);
                         MediaSource.isTypeSupported = function(type) {
@@ -1034,7 +1039,9 @@ async def _play_lecture_inner(
                         window[cbName] = function(d) {{ delete window[cbName]; if (s && s.parentNode) s.parentNode.removeChild(s); }};
                         var s = document.createElement('script');
                         s.src = url;
+                        s.onerror = function() {{ delete window[cbName]; if (s && s.parentNode) s.parentNode.removeChild(s); }};
                         document.head.appendChild(s);
+                        setTimeout(function() {{ if (window[cbName]) {{ delete window[cbName]; if (s && s.parentNode) s.parentNode.removeChild(s); }} }}, 10000);
                     }};
                 }}
                 // isPlayedContent: 플레이어가 "재생 시작" 이벤트로 설정하는 플래그.

@@ -153,11 +153,10 @@ async def run():
 
 async def _try_login(user_id: str, password: str) -> CourseScraper | None:
     """CourseScraper로 로그인을 시도한다. 실패 시 None 반환."""
-    _console = Console()
     scraper = CourseScraper(
         username=user_id,
         password=password,
-        log_callback=lambda msg: _console.print(f"  [dim]{msg}[/dim]"),
+        log_callback=lambda msg: console.print(f"  [dim]{msg}[/dim]"),
     )
     try:
         await scraper.start()
