@@ -885,6 +885,10 @@ async def play_lecture(
                         body = await response.text()
                     except Exception:
                         # 스트림 소비 완료/연결 끊김 등 — 디버그 로그이므로 무시
+                        try:
+                            await response.dispose()
+                        except Exception:
+                            pass
                         return
                     if response.status >= 400:
                         log(f"  [SNIFF←RES] body(4xx)={body!r}")
