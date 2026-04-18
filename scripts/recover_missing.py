@@ -6,8 +6,13 @@
 사용법:
     python -m scripts.recover_missing            # 대화형 (확인 후 실행)
     python -m scripts.recover_missing --dry-run  # 목록만 출력
-    python -m scripts.recover_missing --course <course_id>  # 특정 과목만
+    python -m scripts.recover_missing --course <course_id>         # 특정 과목만
+    python -m scripts.recover_missing --weeks 3주차 4주차           # 특정 주차만
     python -m scripts.recover_missing --yes      # 확인 프롬프트 생략
+
+환경변수:
+    FFMPEG_PATH                ffmpeg 실행파일 또는 bin 디렉토리 경로
+    STUDY_HELPER_DOWNLOAD_DIR  다운로드 루트 override
 
 구조적으로 다운로드 불가능한 항목(learningx)은 자동 제외된다.
 수집·실행·집계 로직은 src/service/recover_pipeline.py가 단일 소스로 제공한다.
@@ -18,15 +23,21 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import shutil
 import sys
 from pathlib import Path
 
-# ffmpeg PATH 추가 (Windows winget 설치 경로)
-_FFMPEG_DIR = os.path.expandvars(
-    r"%LOCALAPPDATA%\Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-8.1-full_build\bin"
-)
-if os.path.isdir(_FFMPEG_DIR):
-    os.environ["PATH"] = _FFMPEG_DIR + os.pathsep + os.environ.get("PATH", "")
+# ffmpeg 동적 탐지 — FFMPEG_PATH env 우선, 없으면 PATH 에서 which.
+# 과거 winget ffmpeg-8.1 경로 하드코딩은 버전 업그레이드 시 파손되어 제거.
+_ffmpeg_env = os.environ.get("FFMPEG_PATH", "").strip()
+if _ffmpeg_env:
+    _candidate = _ffmpeg_env
+    if os.path.isfile(_candidate):
+        _candidate = os.path.dirname(_candidate)
+    if os.path.isdir(_candidate):
+        os.environ["PATH"] = _candidate + os.pathsep + os.environ.get("PATH", "")
+elif not shutil.which("ffmpeg"):
+    print("[경고] ffmpeg 를 찾을 수 없습니다. FFMPEG_PATH env 또는 PATH 에 추가하세요.")
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -43,6 +54,10 @@ async def main() -> int:
     parser = argparse.ArgumentParser(description="누락 다운로드 복구")
     parser.add_argument("--dry-run", action="store_true", help="목록만 출력하고 종료")
     parser.add_argument("--course", type=str, default=None, help="특정 course_id만 대상")
+    parser.add_argument(
+        "--weeks", nargs="+", default=None,
+        help="특정 주차만 대상 (예: --weeks 3주차 4주차)",
+    )
     parser.add_argument("--yes", "-y", action="store_true", help="확인 프롬프트 생략")
     args = parser.parse_args()
 
@@ -50,13 +65,20 @@ async def main() -> int:
         print("[오류] LMS 자격증명이 설정되지 않았습니다. .env를 확인하세요.")
         return 1
 
-    # 로컬 Windows 실행 시 Docker 경로 보정
-    download_dir = Config.get_download_dir()
-    if download_dir.startswith("/data") and sys.platform == "win32":
-        local_fallback = Path("data/downloads").resolve()
-        local_fallback.mkdir(parents=True, exist_ok=True)
-        Config.DOWNLOAD_DIR = str(local_fallback)
-        print(f"  [보정] DOWNLOAD_DIR = {Config.DOWNLOAD_DIR}")
+    # 우선순위: STUDY_HELPER_DOWNLOAD_DIR env > Config.get_download_dir()
+    # Windows 에서 Docker 경로(/data) 로 잘못 판정되면 ~/Downloads/study-helper 로 fallback
+    env_override = os.environ.get("STUDY_HELPER_DOWNLOAD_DIR", "").strip()
+    if env_override:
+        Config.DOWNLOAD_DIR = env_override
+        Path(env_override).mkdir(parents=True, exist_ok=True)
+        print(f"  [env override] DOWNLOAD_DIR = {env_override}")
+    else:
+        download_dir = Config.get_download_dir()
+        if download_dir.startswith("/data") and sys.platform == "win32":
+            local_fallback = Path.home() / "Downloads" / "study-helper"
+            local_fallback.mkdir(parents=True, exist_ok=True)
+            Config.DOWNLOAD_DIR = str(local_fallback)
+            print(f"  [보정] DOWNLOAD_DIR = {Config.DOWNLOAD_DIR}")
 
     rule = Config.DOWNLOAD_RULE or "both"
     print(f"  다운로드 규칙: {rule}")
@@ -81,6 +103,19 @@ async def main() -> int:
         details = await scraper.fetch_all_details(courses, concurrency=3)
 
         missing = collect_missing(courses, details)
+
+        # --weeks 필터 (예: ["3주차", "4주차"] → 해당 주차 접두사 매칭)
+        if args.weeks:
+            week_prefixes = set(args.weeks)
+
+            def _week_prefix(lec_week_label: str) -> str:
+                # "3주차(총 8주 중)" → "3주차"
+                return lec_week_label.split("(")[0].strip() if lec_week_label else ""
+
+            before = len(missing)
+            missing = [m for m in missing if _week_prefix(m.lec.week_label) in week_prefixes]
+            print(f"  --weeks {sorted(week_prefixes)} 필터 적용: {before} → {len(missing)}건")
+
         if not missing:
             print("  누락된 다운로드가 없습니다.")
             return 0
