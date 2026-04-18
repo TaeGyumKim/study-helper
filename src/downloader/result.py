@@ -22,6 +22,24 @@ REASON_UNKNOWN = "unknown"                        # 분류 불가
 REASON_PLAY_FAILED = "play_failed"                # 3회 재시도 후 재생 실패
 REASON_STOPPED = "stopped"                        # 사용자 중단 신호
 
+# ── 재시도 정책 중앙집중 ───────────────────────────────────
+# 재시도해도 의미가 없는 "구조적 실패" 사유. auto.py 가 직접 튜플을 하드코드
+# 하지 않고 이 함수를 호출하도록 통일해, 새 사유 추가 시 누락을 방지한다.
+# SUSPICIOUS_STUB 은 DOM 폴링 타이밍 의존이라 extract_video_url 재실행으로
+# 회복 가능 → retry 허용 대상.
+_NO_RETRY_REASONS = frozenset({
+    REASON_UNSUPPORTED,
+    REASON_PATH_INVALID,
+    REASON_SSRF_BLOCKED,
+})
+
+
+def is_no_retry_reason(reason: str | None) -> bool:
+    """해당 사유로 실패한 다운로드를 재시도하지 않는 것이 옳은지 여부."""
+    if not reason:
+        return False
+    return reason in _NO_RETRY_REASONS
+
 
 @dataclass
 class DownloadResult:

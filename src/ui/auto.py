@@ -19,12 +19,11 @@ from rich.text import Text
 from src.config import KST, Config, get_data_path
 from src.downloader.paths import expected_paths, file_present
 from src.downloader.result import (
-    REASON_PATH_INVALID,
     REASON_PLAY_FAILED,
-    REASON_SSRF_BLOCKED,
     REASON_STOPPED,
     REASON_UNKNOWN,
     REASON_UNSUPPORTED,
+    is_no_retry_reason,
 )
 from src.logger import get_logger
 from src.service.progress_store import ProgressStore
@@ -662,11 +661,10 @@ async def _run_download_step(
             console.print("  [dim]  → 다운로드 완료[/dim]")
             return DownloadStepResult(ok=True, reason=None, downloadable=True)
 
-        # 재시도해도 무의미한 구조적 실패는 즉시 반환
-        # NOTE: REASON_SUSPICIOUS_STUB 은 재시도 허용 대상에 포함한다 —
-        # Plan A DOM 폴링 타이밍에 따라 일시적으로 intro/preloader.mp4 가 잡힐 수
-        # 있으며 재시도 시 extract_video_url 이 새 URL 을 뽑을 기회가 있다.
-        if result.reason in (REASON_UNSUPPORTED, REASON_PATH_INVALID, REASON_SSRF_BLOCKED):
+        # 재시도해도 무의미한 구조적 실패는 즉시 반환. 재시도 정책은
+        # result.is_no_retry_reason() 에 중앙집중 — 새 reason 추가 시 auto.py 를
+        # 고칠 필요 없이 result.py 의 _NO_RETRY_REASONS 에만 추가하면 된다.
+        if is_no_retry_reason(result.reason):
             _log.warning("다운로드 실패 (재시도 불가): %s — reason=%s", label, result.reason)
             console.print(f"  [yellow]  → 다운로드 실패: {label} (사유={result.reason})[/yellow]")
             downloadable = result.reason != REASON_UNSUPPORTED
