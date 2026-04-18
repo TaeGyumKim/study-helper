@@ -1,88 +1,149 @@
-"""자동 모드 progress 정리 로직 단위 테스트."""
+"""ProgressStore 로드/저장/마이그레이션/상태 전이 단위 테스트."""
 
 import json
 from pathlib import Path
-from unittest.mock import patch
 
-from src.scraper.models import Course, CourseDetail, LectureItem, LectureType, Week
-from src.ui.auto import _load_progress, _save_progress
+from src.service.progress_store import ProgressEntry, ProgressStore
 
 
-def _make_lec(url: str, completion: str = "incomplete") -> LectureItem:
-    return LectureItem(
-        title="test",
-        item_url=url,
-        lecture_type=LectureType.MOVIE,
-        completion=completion,
-    )
+def _new_store(tmp_path: Path) -> ProgressStore:
+    return ProgressStore(path=tmp_path / "auto_progress.json")
 
 
-def test_load_progress_empty(tmp_path: Path):
-    """파일이 없으면 빈 set을 반환한다."""
-    with patch("src.ui.auto._PROGRESS_FILE", tmp_path / "no_exist.json"):
-        assert _load_progress() == set()
+def test_load_missing_file(tmp_path: Path):
+    """파일이 없으면 빈 entries 로 초기화된다."""
+    store = _new_store(tmp_path)
+    store.load()
+    assert store.entries == {}
 
 
-def test_load_save_roundtrip(tmp_path: Path):
-    """저장 후 로드하면 동일한 데이터를 반환한다."""
-    pfile = tmp_path / "progress.json"
-    urls = {"https://canvas.ssu.ac.kr/a", "https://canvas.ssu.ac.kr/b"}
-    with patch("src.ui.auto._PROGRESS_FILE", pfile):
-        _save_progress(urls)
-        assert _load_progress() == urls
+def test_load_corrupted_json(tmp_path: Path):
+    """파손된 JSON은 빈 entries 로 안전 복구된다."""
+    store = _new_store(tmp_path)
+    store.path.write_text("not valid json", encoding="utf-8")
+    store.load()
+    assert store.entries == {}
 
 
-def test_load_progress_corrupted(tmp_path: Path):
-    """파손된 JSON은 빈 set을 반환한다."""
-    pfile = tmp_path / "progress.json"
-    pfile.write_text("not valid json", encoding="utf-8")
-    with patch("src.ui.auto._PROGRESS_FILE", pfile):
-        assert _load_progress() == set()
+def test_v1_to_v2_migration(tmp_path: Path):
+    """v1 legacy 리스트 포맷은 played=True, downloaded=None 으로 마이그레이션된다."""
+    store = _new_store(tmp_path)
+    v1_urls = ["https://canvas.ssu.ac.kr/a", "https://canvas.ssu.ac.kr/b"]
+    store.path.write_text(json.dumps(v1_urls), encoding="utf-8")
+    store.load()
+    assert set(store.entries.keys()) == set(v1_urls)
+    for url in v1_urls:
+        entry = store.entries[url]
+        assert entry.played is True
+        assert entry.downloaded is None
+        assert entry.downloadable is None
 
 
-def test_stale_progress_removed(tmp_path: Path):
-    """LMS에서 여전히 미완료인 강의는 progress에서 제거되어야 한다."""
-    pfile = tmp_path / "progress.json"
-    # 3개 URL이 처리 완료로 기록됨
-    completed_urls = {
-        "https://canvas.ssu.ac.kr/courses/1/modules/items/100",
-        "https://canvas.ssu.ac.kr/courses/1/modules/items/200",
-        "https://canvas.ssu.ac.kr/courses/1/modules/items/300",
-    }
-    pfile.write_text(json.dumps(sorted(completed_urls)), encoding="utf-8")
+def test_v2_roundtrip(tmp_path: Path):
+    """v2 저장 후 로드하면 동일 상태로 복원된다."""
+    store = _new_store(tmp_path)
+    url = "https://canvas.ssu.ac.kr/courses/1/modules/items/100"
+    store.mark_played(url)
+    store.mark_download_success(url)
+    store.save()
 
-    # LMS에서는 items/100만 여전히 미완료 (needs_watch=True)
-    lec_still_incomplete = _make_lec("/courses/1/modules/items/100", "incomplete")
-    lec_actually_done = _make_lec("/courses/1/modules/items/200", "completed")
-    lec_also_done = _make_lec("/courses/1/modules/items/300", "completed")
+    reloaded = _new_store(tmp_path)
+    reloaded.load()
+    entry = reloaded.get(url)
+    assert entry is not None
+    assert entry.played is True
+    assert entry.downloaded is True
+    assert entry.downloadable is True
 
-    # 시뮬레이션: auto.py의 로직 재현
-    with patch("src.ui.auto._PROGRESS_FILE", pfile):
-        completed = _load_progress()
-        still_incomplete: set[str] = set()
 
-        all_lecs = [lec_still_incomplete, lec_actually_done, lec_also_done]
-        pending = []
-        for lec in all_lecs:
-            if lec.needs_watch:
-                if lec.full_url in completed:
-                    still_incomplete.add(lec.full_url)
-                pending.append(lec)
+def test_unknown_format_fallback(tmp_path: Path):
+    """version 키가 없거나 알 수 없는 포맷은 빈 entries 로 안전 복구된다."""
+    store = _new_store(tmp_path)
+    store.path.write_text(json.dumps({"some": "garbage"}), encoding="utf-8")
+    store.load()
+    assert store.entries == {}
 
-        stale = completed & still_incomplete
-        if stale:
-            completed -= stale
-            _save_progress(completed)
 
-        # items/100은 LMS 미완료 → progress에서 제거됨 → pending에 포함
-        assert lec_still_incomplete.full_url not in completed
-        assert len(pending) == 1
-        assert pending[0] is lec_still_incomplete
+def test_mark_played_then_failed(tmp_path: Path):
+    """재생 완료 후 다운로드 실패 시 reason 이 기록되고 downloaded=False."""
+    store = _new_store(tmp_path)
+    url = "u1"
+    store.mark_played(url)
+    store.mark_download_failed(url, reason="network")
+    entry = store.get(url)
+    assert entry.played is True
+    assert entry.downloaded is False
+    assert entry.downloadable is True
+    assert entry.reason == "network"
 
-        # items/200, 300은 LMS 완료 → progress에 유지
-        assert lec_actually_done.full_url in completed
-        assert lec_also_done.full_url in completed
 
-        # 파일에도 반영됨
-        saved = _load_progress()
-        assert lec_still_incomplete.full_url not in saved
+def test_mark_unsupported(tmp_path: Path):
+    """구조적 다운로드 불가(learningx 등) 항목은 downloadable=False 로 고정."""
+    store = _new_store(tmp_path)
+    store.mark_unsupported("u2", reason="unsupported")
+    entry = store.get("u2")
+    assert entry.downloadable is False
+    assert entry.downloaded is False
+    assert entry.reason == "unsupported"
+
+
+def test_is_fully_done(tmp_path: Path):
+    """재생 완료 + (다운로드 완료 OR 다운로드 불가)이면 True."""
+    store = _new_store(tmp_path)
+    # case A: 재생 + 다운로드 완료
+    store.mark_played("a")
+    store.mark_download_success("a")
+    assert store.is_fully_done("a") is True
+
+    # case B: 재생 + 구조적 다운로드 불가
+    store.mark_unsupported("b")
+    assert store.is_fully_done("b") is True
+
+    # case C: 재생만 완료, 다운로드 미완
+    store.mark_played("c")
+    assert store.is_fully_done("c") is False
+
+    # case D: 미존재
+    assert store.is_fully_done("nonexistent") is False
+
+
+def test_needs_download_retry(tmp_path: Path):
+    """재생 완료 + downloadable≠False + downloaded≠True 이면 재시도 대상."""
+    store = _new_store(tmp_path)
+    store.mark_played("x")
+    store.mark_download_failed("x", reason="network")
+    assert store.needs_download_retry("x") is True
+
+    store.mark_download_success("x")
+    assert store.needs_download_retry("x") is False
+
+
+def test_retain_only_removes_orphans(tmp_path: Path):
+    """LMS 에서 사라진 URL 은 store 에서도 정리된다."""
+    store = _new_store(tmp_path)
+    for url in ("keep1", "keep2", "orphan"):
+        store.mark_played(url)
+
+    removed = store.retain_only({"keep1", "keep2"})
+    assert removed == 1
+    assert set(store.entries.keys()) == {"keep1", "keep2"}
+
+
+def test_mark_incomplete_resets_played(tmp_path: Path):
+    """LMS가 항목을 다시 미완료로 바꾸면 played=False 및 downloaded=None 복귀."""
+    store = _new_store(tmp_path)
+    store.entries["u"] = ProgressEntry(played=True, downloaded=True, downloadable=True)
+    store.mark_incomplete("u")
+    entry = store.get("u")
+    assert entry.played is False
+    assert entry.downloaded is None
+
+
+def test_save_atomic_no_tmp_remains(tmp_path: Path):
+    """save() 성공 후 .tmp 파일이 남지 않는다 (atomic replace 확인)."""
+    store = _new_store(tmp_path)
+    store.mark_played("u")
+    store.save()
+    tmp_file = store.path.with_suffix(store.path.suffix + ".tmp")
+    assert not tmp_file.exists()
+    assert store.path.exists()
