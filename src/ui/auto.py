@@ -18,7 +18,14 @@ from rich.text import Text
 
 from src.config import KST, Config, get_data_path
 from src.downloader.paths import expected_paths, file_present
-from src.downloader.result import REASON_PLAY_FAILED, REASON_STOPPED, REASON_UNSUPPORTED
+from src.downloader.result import (
+    REASON_PATH_INVALID,
+    REASON_PLAY_FAILED,
+    REASON_SSRF_BLOCKED,
+    REASON_STOPPED,
+    REASON_UNKNOWN,
+    REASON_UNSUPPORTED,
+)
 from src.logger import get_logger
 from src.service.progress_store import ProgressStore
 from src.service.scheduler import (
@@ -68,6 +75,82 @@ _MAX_PLAY_RETRIES = 3
 
 # 브라우저 메모리 누적 방지: N사이클마다 브라우저 재시작
 _BROWSER_RESTART_INTERVAL = 3
+
+# B3: Playwright driver/browser 죽음을 감지하는 예외 메시지 패턴.
+# 이 중 하나가 예외 메시지에 포함되면 scraper를 close() 후 start()로 재시작한다.
+_DEAD_BROWSER_MARKERS = (
+    "connection closed",                     # driver 연결 종료
+    "target page, context or browser has been closed",
+    "browser has been closed",
+    "browsercontext has been closed",
+    "browsercontext.new_page",               # 컨텍스트 자체가 죽었을 때 흔한 메시지
+    "websocket.",                            # playwright 내부 ws 예외
+)
+
+
+def _is_browser_dead_exception(exc: BaseException) -> bool:
+    """예외 메시지를 보고 Playwright 브라우저/드라이버 death 여부를 추정한다."""
+    msg = str(exc).lower()
+    return any(marker in msg for marker in _DEAD_BROWSER_MARKERS)
+
+
+async def _restart_browser_with_retry(scraper: "CourseScraper", max_retries: int = 3) -> bool:
+    """브라우저를 close() 후 start()로 재시작한다. 실패 시 지수 백오프 재시도.
+
+    Returns:
+        True  — 재시작 성공
+        False — max_retries 모두 실패
+    """
+    _log.info("브라우저 재시작 시도")
+    try:
+        await scraper.close()
+    except Exception as close_e:
+        _log.debug("브라우저 close 실패 (무시): %s", close_e)
+
+    for retry in range(max_retries):
+        try:
+            await scraper.start()
+            _log.info("브라우저 재시작 완료 (retry=%d)", retry + 1)
+            return True
+        except Exception as restart_e:
+            _log.error("브라우저 재시작 실패 (%d/%d): %s", retry + 1, max_retries, restart_e)
+            if retry < max_retries - 1:
+                await asyncio.sleep(5 * (retry + 1))
+            else:
+                # 마지막 실패 시 부분 생성된 리소스 정리
+                try:
+                    await scraper.close()
+                except Exception:
+                    pass
+    return False
+
+
+async def _recover_if_browser_dead(
+    scraper: "CourseScraper",
+    exc: BaseException,
+    context_msg: str,
+) -> bool:
+    """예외가 브라우저 death 패턴과 일치하면 재시작을 시도한다.
+
+    Args:
+        scraper:     재시작 대상 CourseScraper
+        exc:         관찰된 예외
+        context_msg: 로그/콘솔에 표시할 맥락 문자열 (예: 강의명)
+
+    Returns:
+        True  — 재시작 수행(성공/실패 무관), 호출 측은 이 강의 건너뛰고 다음으로 진행 권장
+        False — 브라우저 죽음 패턴 아님. 예외 처리 계속 진행
+    """
+    if not _is_browser_dead_exception(exc):
+        return False
+    _log.warning("브라우저 연결 끊김 감지 (%s): %s", context_msg, exc)
+    console.print(f"  [yellow]브라우저 연결 끊김 — 재시작 시도 ({context_msg})[/yellow]")
+    ok = await _restart_browser_with_retry(scraper)
+    if ok:
+        console.print("  [dim]브라우저 재시작 완료[/dim]")
+    else:
+        console.print("  [red]브라우저 재시작 실패 — 이 사이클 후반 작업이 연쇄 실패할 수 있습니다[/red]")
+    return True
 
 
 def _load_store() -> ProgressStore:
@@ -242,26 +325,11 @@ async def run_auto_mode(
             if cycle_count > 1 and cycle_count % _BROWSER_RESTART_INTERVAL == 0:
                 _log.info("브라우저 주기적 재시작 (cycle %d)", cycle_count)
                 console.print("  [dim]브라우저 메모리 정리를 위해 재시작 중...[/dim]")
-                try:
-                    await scraper.close()
-                except Exception as close_e:
-                    _log.debug("브라우저 close 실패 (무시): %s", close_e)
-                for retry in range(3):
-                    try:
-                        await scraper.start()
-                        _log.info("브라우저 주기적 재시작 완료")
-                        console.print("  [dim]브라우저 재시작 완료[/dim]")
-                        break
-                    except Exception as restart_e:
-                        _log.error("브라우저 재시작 실패 (%d/3): %s", retry + 1, restart_e)
-                        if retry < 2:
-                            await asyncio.sleep(5)
-                        else:
-                            console.print(f"  [red]브라우저 재시작 3회 실패: {restart_e}[/red]")
-                            console.print("  [red]자동 모드를 종료합니다.[/red]")
-                            stop_event.set()
-                            break
-                if stop_event.is_set():
+                if await _restart_browser_with_retry(scraper):
+                    console.print("  [dim]브라우저 재시작 완료[/dim]")
+                else:
+                    console.print("  [red]브라우저 재시작 3회 실패 — 자동 모드를 종료합니다.[/red]")
+                    stop_event.set()
                     break
 
             # 강의 목록 새로고침
@@ -270,25 +338,8 @@ async def run_auto_mode(
             except Exception as e:
                 _log.error("강의 목록 갱신 실패: %s", e)
                 console.print(f"  [red]강의 목록 갱신 실패: {e}[/red]")
-
-                # 브라우저 연결 끊김 감지 시 자동 재시작
-                if "Connection closed" in str(e) or "socket" in str(e).lower():
-                    console.print("  [yellow]브라우저 연결 끊김 — 재시작 시도...[/yellow]")
-                    _log.info("브라우저 재시작 시도")
-                    try:
-                        await scraper.close()
-                        await scraper.start()
-                        console.print("  [dim]브라우저 재시작 완료[/dim]")
-                        _log.info("브라우저 재시작 완료")
-                    except Exception as restart_e:
-                        _log.error("브라우저 재시작 실패: %s", restart_e)
-                        console.print(f"  [red]브라우저 재시작 실패: {restart_e}[/red]")
-                        # start() 실패 시 부분 생성된 리소스 정리
-                        try:
-                            await scraper.close()
-                        except Exception:
-                            pass
-
+                # 브라우저 연결 끊김 감지 시 자동 재시작 (공용 헬퍼)
+                await _recover_if_browser_dead(scraper, e, "강의 목록 갱신")
                 await asyncio.sleep(60)
                 continue
 
@@ -499,6 +550,8 @@ async def _process_lecture(
             last_err_msg = f"재생 실패: {exc_type}"
             _log.error("재생 예외 (%d/%d): %s — %s", play_attempt, _MAX_PLAY_RETRIES, label, e, exc_info=True)
             console.print(f"  [red]  → {last_err_msg} ({play_attempt}/{_MAX_PLAY_RETRIES})[/red]")
+            # B3: 브라우저가 죽은 경우 재시작 후 다음 attempt로 자연스럽게 진행
+            await _recover_if_browser_dead(scraper, e, label)
 
     if not play_success:
         _log.warning("재생 최종 실패: %s — %s", label, last_err_msg)
@@ -554,40 +607,83 @@ async def _process_download_only(
     )
 
 
+_MAX_DOWNLOAD_RETRIES = 3
+
+
 async def _run_download_step(
     scraper: "CourseScraper",
     course: "Course",
     lec: "LectureItem",
     label: str,
 ) -> DownloadStepResult:
-    """`run_download`를 호출하고 결과를 `DownloadStepResult`로 정규화해 반환한다."""
+    """`run_download`를 최대 3회 시도하고 결과를 `DownloadStepResult`로 반환한다.
+
+    B7: 브라우저 죽음/일시적 네트워크 오류로 한 번 실패해도 같은 강의를 즉시
+    포기하지 않도록 3회 지수 백오프 재시도. 재시도 전에 브라우저 death 감지 시
+    자동 재시작을 수행한다. UNSUPPORTED/SUSPICIOUS_STUB 등 구조적 실패는
+    재시도해도 무의미하므로 즉시 반환한다.
+    """
     from src.ui.download import run_download
 
     rule = Config.DOWNLOAD_RULE or "both"
     audio_only = rule == "audio"
     both = rule == "both"
-    _log.info("다운로드 시작: %s", label)
-    console.print("  [dim]  → 다운로드 중...[/dim]")
-    try:
-        result = await run_download(scraper.page, lec, course, audio_only=audio_only, both=both)
-    except Exception as e:
-        # SEC-002: 원본 예외 메시지에는 세션 토큰 포함 URL이 섞일 수 있어
-        # 텔레그램 등 외부 채널에는 타입명만 보낸다. 상세는 study_helper.log에만.
-        exc_type = type(e).__name__
-        _log.error("다운로드 예외: %s — %s", label, e, exc_info=True)
-        console.print(f"  [red]  → 다운로드 실패: {exc_type}[/red]")
-        _tg_error_notify(course, lec, f"다운로드 실패: {exc_type}")
-        return DownloadStepResult(ok=False, reason=f"exception:{exc_type}", downloadable=True)
 
-    if result.ok:
-        _log.info("다운로드 완료: %s", label)
-        console.print("  [dim]  → 다운로드 완료[/dim]")
-        return DownloadStepResult(ok=True, reason=None, downloadable=True)
+    last_reason = REASON_UNKNOWN
+    last_exc_type = ""
+    for attempt in range(1, _MAX_DOWNLOAD_RETRIES + 1):
+        if attempt == 1:
+            _log.info("다운로드 시작: %s", label)
+            console.print("  [dim]  → 다운로드 중...[/dim]")
+        else:
+            wait_sec = 5 * (attempt - 1)  # 5s, 10s
+            _log.info("다운로드 재시도 %d/%d (%d초 대기): %s", attempt, _MAX_DOWNLOAD_RETRIES, wait_sec, label)
+            console.print(f"  [dim]  → 다운로드 재시도 {attempt}/{_MAX_DOWNLOAD_RETRIES} ({wait_sec}초 대기)...[/dim]")
+            await asyncio.sleep(wait_sec)
 
-    _log.warning("다운로드 실패: %s — reason=%s", label, result.reason)
-    console.print(f"  [yellow]  → 다운로드 실패: {label} (사유={result.reason})[/yellow]")
-    downloadable = result.reason != REASON_UNSUPPORTED
-    return DownloadStepResult(ok=False, reason=result.reason, downloadable=downloadable)
+        try:
+            result = await run_download(scraper.page, lec, course, audio_only=audio_only, both=both)
+        except Exception as e:
+            # SEC-002: 원본 예외 메시지에는 세션 토큰 포함 URL이 섞일 수 있어
+            # 텔레그램 등 외부 채널에는 타입명만 보낸다. 상세는 study_helper.log에만.
+            exc_type = type(e).__name__
+            last_exc_type = exc_type
+            last_reason = f"exception:{exc_type}"
+            _log.error(
+                "다운로드 예외 (%d/%d): %s — %s", attempt, _MAX_DOWNLOAD_RETRIES, label, e, exc_info=True,
+            )
+            console.print(f"  [red]  → 다운로드 실패: {exc_type} ({attempt}/{_MAX_DOWNLOAD_RETRIES})[/red]")
+            # 브라우저 죽음 감지 시 재시작 — 다음 attempt에 정상 페이지 사용
+            await _recover_if_browser_dead(scraper, e, label)
+            continue
+
+        if result.ok:
+            _log.info("다운로드 완료: %s", label)
+            console.print("  [dim]  → 다운로드 완료[/dim]")
+            return DownloadStepResult(ok=True, reason=None, downloadable=True)
+
+        # 재시도해도 무의미한 구조적 실패는 즉시 반환
+        # NOTE: REASON_SUSPICIOUS_STUB 은 재시도 허용 대상에 포함한다 —
+        # Plan A DOM 폴링 타이밍에 따라 일시적으로 intro/preloader.mp4 가 잡힐 수
+        # 있으며 재시도 시 extract_video_url 이 새 URL 을 뽑을 기회가 있다.
+        if result.reason in (REASON_UNSUPPORTED, REASON_PATH_INVALID, REASON_SSRF_BLOCKED):
+            _log.warning("다운로드 실패 (재시도 불가): %s — reason=%s", label, result.reason)
+            console.print(f"  [yellow]  → 다운로드 실패: {label} (사유={result.reason})[/yellow]")
+            downloadable = result.reason != REASON_UNSUPPORTED
+            return DownloadStepResult(ok=False, reason=result.reason, downloadable=downloadable)
+
+        last_reason = result.reason
+        _log.warning(
+            "다운로드 실패 (%d/%d): %s — reason=%s", attempt, _MAX_DOWNLOAD_RETRIES, label, result.reason,
+        )
+        console.print(
+            f"  [yellow]  → 다운로드 실패: {label} (사유={result.reason}, {attempt}/{_MAX_DOWNLOAD_RETRIES})[/yellow]"
+        )
+
+    # 모든 재시도 실패
+    if last_exc_type:
+        _tg_error_notify(course, lec, f"다운로드 실패: {last_exc_type}")
+    return DownloadStepResult(ok=False, reason=last_reason, downloadable=True)
 
 
 def _apply_play_result(store: ProgressStore, url: str, result: PlayResult) -> None:
