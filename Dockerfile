@@ -3,9 +3,16 @@ FROM python:3.11-slim-bookworm
 # 시스템 의존성 설치 및 보안 패치 적용
 # - apt-get upgrade: 알려진 CVE (jpeg-xl, freetype, tar 등) 수정
 # - ffmpeg: mp4 → mp3 변환 (사용자 다운로드용)
+# - curl: HEALTHCHECK 용
+# - tini: init process (PID 1) — Playwright 자식 프로세스 좀비 수집
 RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     ffmpeg \
+    curl \
+    tini \
     && rm -rf /var/lib/apt/lists/*
+
+# TZ=Asia/Seoul 을 compose 없이 docker run 직접 실행 시에도 적용
+ENV TZ=Asia/Seoul
 
 WORKDIR /app
 
@@ -40,4 +47,11 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app \
     PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright
 
-ENTRYPOINT ["uv", "run", "--no-sync", "python", "src/main.py"]
+# API 서버 모드 전용 HEALTHCHECK — CUI 모드에서는 /health 미제공하므로 실패로
+# 판정되지만, 이는 컨테이너를 API 서버로 구동하지 않았다는 정보 신호로 충분.
+# --start-period=20s 로 Playwright 초기화 시간 확보.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD curl -fs http://127.0.0.1:${STUDY_HELPER_API_PORT:-18090}/health || exit 1
+
+# tini 로 Playwright/Chrome 자식 프로세스 signal forwarding + 좀비 수집
+ENTRYPOINT ["/usr/bin/tini", "--", "uv", "run", "--no-sync", "python", "src/main.py"]
