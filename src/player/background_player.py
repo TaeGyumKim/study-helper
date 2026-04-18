@@ -15,6 +15,7 @@ LMS가 수강 완료로 인식하도록 실제 재생 시간을 유지한다.
 import asyncio
 import json
 import math
+import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -38,6 +39,44 @@ _ALLOWED_PLAYER_HOSTS = {"canvas.ssu.ac.kr", "commons.ssu.ac.kr"}
 
 # body 읽기를 건너뛸 바이너리 Content-Type 접두사
 _BINARY_CT = ("image/", "video/", "audio/", "font/", "application/octet-stream")
+
+# ── PII/secret 마스킹 ────────────────────────────────────────────
+# debug sniff 로그의 request/response body 에 포함될 수 있는 민감 정보를
+# 정규식으로 치환한다. 과거 로그에서 OAuth signature, CSRF 토큰, 학번,
+# 사용자 이메일/실명 평문 유출이 확인되어 반드시 모든 body 로그에 적용한다.
+_MASK = "***REDACTED***"
+# URL-encoded form body (x-www-form-urlencoded) 용 패턴
+_SENSITIVE_KV_RE = re.compile(
+    r"(?i)("
+    r"oauth_(?:signature|nonce|timestamp|consumer_key|token)"
+    r"|csrf[-_]?token"
+    r"|custom_user_(?:email|login|name_full|name_family|name_given|id)"
+    r"|custom_canvas_user_(?:id|login_id)"
+    r"|lis_person_(?:contact_email_primary|name_full|name_given|name_family|sourcedid)"
+    r"|user_image|user_id|user_login|user_email"
+    r"|password|passwd|secret|api[_-]?key|authorization|token"
+    r")=[^&\s]+"
+)
+# HTML meta / data-* attribute 용 패턴
+_SENSITIVE_HTML_RE = re.compile(
+    r"(?is)("
+    r'<meta\s+name="csrf-token"\s+content=")[^"]*(")'
+    r'|(data-user_(?:email|login|name|id)=")[^"]*(")'
+)
+
+
+def _mask_sensitive(text: str) -> str:
+    """로그로 남기기 전에 OAuth/CSRF/PII 를 마스킹한다."""
+    if not text:
+        return text
+    text = _SENSITIVE_KV_RE.sub(lambda m: f"{m.group(1)}={_MASK}", text)
+    text = _SENSITIVE_HTML_RE.sub(
+        lambda m: (m.group(1) or m.group(3) or "")
+        + _MASK
+        + (m.group(2) or m.group(4) or ""),
+        text,
+    )
+    return text
 
 
 def _set_sl_param(url: str, value: str) -> str:
@@ -367,7 +406,7 @@ async def _report_completion(
                 """)
                 status = result.get("s")
                 body = result.get("b", "")
-                log(f"  [완료 보고] page ctx fetch: {status}  body={body!r}")
+                log(f"  [완료 보고] page ctx fetch: {status}  body={_mask_sensitive(body)!r}")
                 if status == 200 and '"result":true' in body:
                     return
                 log(f"  [완료 보고] page ctx fetch 실패 ({status}) — page.request.get으로 폴백")
@@ -673,7 +712,7 @@ async def _play_via_progress_api(
                         )
                         try:
                             body = await response.text()
-                            log(f"  [API] 응답 (fallback): {response.status}  body={body[:200]!r}")
+                            log(f"  [API] 응답 (fallback): {response.status}  body={_mask_sensitive(body[:200])!r}")
                         finally:
                             await response.dispose()
                 else:
@@ -683,7 +722,7 @@ async def _play_via_progress_api(
                     )
                     try:
                         body = await response.text()
-                        log(f"  [API] 응답: {response.status}  body={body[:200]!r}")
+                        log(f"  [API] 응답: {response.status}  body={_mask_sensitive(body[:200])!r}")
                     finally:
                         await response.dispose()
                 next_report = current + report_interval
@@ -849,8 +888,9 @@ async def play_lecture(
             if "commons.ssu.ac.kr" in url or "learningx" in url:
                 log(f"  [SNIFF→REQ] {request.method} {url}")
                 if request.post_data:
-                    # 민감 정보 노출 방지: POST body는 200자로 제한
-                    log(f"  [SNIFF→REQ] body={request.post_data[:200]!r}")
+                    # PII/secret 마스킹 후 200자로 제한
+                    _masked = _mask_sensitive(request.post_data)
+                    log(f"  [SNIFF→REQ] body={_masked[:200]!r}")
 
         _FULL_BODY_KEYWORDS = (
             "attendance_items",
@@ -890,11 +930,15 @@ async def play_lecture(
                         except Exception:
                             pass
                         return
+                    # PII/secret 마스킹 — HTML meta·data-* 속성, OAuth/CSRF 값 제거
+                    _masked_body = _mask_sensitive(body)
+                    # HTML 전체 덤프는 과도하므로 2000자로 절단 (4xx 는 원인 분석 위해 더 길게 1000자)
                     if response.status >= 400:
-                        log(f"  [SNIFF←RES] body(4xx)={body!r}")
-                    elif body:
-                        log(f"  [SNIFF←RES] body={body!r}")
+                        log(f"  [SNIFF←RES] body(4xx)={_masked_body[:1000]!r}")
+                    elif _masked_body:
+                        log(f"  [SNIFF←RES] body={_masked_body[:2000]!r}")
                     del body
+                    del _masked_body
 
         page.on("request", _on_request)
         page.on("response", _on_response)
@@ -912,10 +956,17 @@ async def play_lecture(
             except Exception:
                 pass
         if _using_fake_video:
+            # B2 진단: unroute 실패가 다운로드 단계로 누출되는지 추적.
+            # 실패 시 ERROR 레벨로 남겨 이후 다운로드 파일이 가짜 webm일 가능성을 알림.
             try:
                 await page.unroute("**/*.mp4")
-            except Exception:
-                pass
+                log("[cleanup] page.unroute('**/*.mp4') 성공")
+            except Exception as _unroute_e:
+                log(f"[cleanup] page.unroute 실패 — 다음 다운로드에 fake webm 누출 가능: {_unroute_e}")
+                import logging as _pl_logging
+                _pl_logging.getLogger(__name__).error(
+                    "page.unroute('**/*.mp4') 실패 — 다운로드 단계에서 fake webm 가능: %s", _unroute_e,
+                )
         # 더미 영상 바이트 즉시 해제
         _fake_video_bytes = None
 
