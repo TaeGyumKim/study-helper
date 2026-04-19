@@ -17,7 +17,7 @@ from rich.prompt import Prompt
 from rich.text import Text
 
 from src.config import KST, Config, get_data_path
-from src.downloader.paths import expected_paths, file_present
+from src.downloader.paths import file_present
 from src.downloader.result import (
     REASON_PLAY_FAILED,
     REASON_STOPPED,
@@ -719,19 +719,13 @@ def _reconcile_store_with_filesystem(
     store: ProgressStore,
 ) -> None:
     """파일시스템 관찰 결과를 store에 반영한다 (Command)."""
-    download_dir = Config.get_download_dir()
-    rule = Config.DOWNLOAD_RULE or "both"
-    for course, detail in zip(courses, details, strict=False):
-        if detail is None:
-            continue
-        for lec in detail.all_video_lectures:
-            if lec.completion != "completed":
-                continue
-            if not lec.is_downloadable:
-                store.mark_unsupported(lec.full_url, reason=REASON_UNSUPPORTED)
-                continue
-            if file_present(download_dir, course.long_name, lec, rule):
-                store.mark_download_confirmed_from_filesystem(lec.full_url)
+    from src.service.download_state import reconcile_store_with_filesystem
+
+    reconcile_store_with_filesystem(
+        courses, details, store,
+        download_dir=Config.get_download_dir(),
+        rule=Config.DOWNLOAD_RULE or "both",
+    )
 
 
 def _list_missing_entries(
@@ -739,25 +733,14 @@ def _list_missing_entries(
     details: list["CourseDetail | None"],
 ) -> list[_MissingTuple]:
     """시청 완료된 강의 중 파일이 누락된 항목 튜플 목록을 반환한다 (Query, 부수효과 없음)."""
-    download_dir = Config.get_download_dir()
-    rule = Config.DOWNLOAD_RULE or "both"
-    missing: list[_MissingTuple] = []
-    for course, detail in zip(courses, details, strict=False):
-        if detail is None:
-            continue
-        for lec in detail.all_video_lectures:
-            if lec.completion != "completed" or not lec.is_downloadable:
-                continue
-            mp4_path, mp3_path = expected_paths(download_dir, course.long_name, lec)
-            has_video = mp4_path.exists()
-            has_audio = mp3_path.exists()
-            if rule == "video" and not has_video:
-                missing.append((course.long_name, lec.week_label, lec.title, "mp4"))
-            elif rule == "audio" and not has_audio:
-                missing.append((course.long_name, lec.week_label, lec.title, "mp3"))
-            elif rule == "both" and not (has_video and has_audio):
-                missing.append((course.long_name, lec.week_label, lec.title, "mp4+mp3"))
-    return missing
+    from src.service.download_state import list_missing_items
+
+    items = list_missing_items(
+        courses, details,
+        download_dir=Config.get_download_dir(),
+        rule=Config.DOWNLOAD_RULE or "both",
+    )
+    return [(m.course.long_name, m.lec.week_label, m.lec.title, m.kind) for m in items]
 
 
 def _notify_download_gaps(missing: list[_MissingTuple]) -> None:
