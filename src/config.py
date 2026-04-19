@@ -140,8 +140,40 @@ class Config:
 
     @classmethod
     def get_download_dir(cls) -> str:
-        """저장된 경로가 없으면 OS 기본 다운로드 폴더를 반환한다."""
-        return cls.DOWNLOAD_DIR or _default_download_dir()
+        """저장된 경로가 없으면 OS 기본 다운로드 폴더를 반환한다.
+
+        Windows 가드(SEC-DRIVE-ROOT-TRAP):
+            `DOWNLOAD_DIR=/data/downloads` 같은 Docker 용 unix 절대경로가
+            Windows 네이티브 실행 시 `D:\\data\\downloads` 드라이브 루트로
+            해석되어 파일이 예상치 못한 곳에 저장되는 문제 방지.
+            Docker 컨테이너(`/.dockerenv` + `/data`)가 아닌 Windows 에서
+            `/` 로 시작하는 경로면 `_default_download_dir()` 로 fallback 하고
+            최초 한 번 경고 로그를 남긴다.
+        """
+        raw = cls.DOWNLOAD_DIR
+        if not raw:
+            return _default_download_dir()
+
+        if (
+            sys.platform == "win32"
+            and (raw.startswith("/") or raw.startswith("\\"))
+            and not _is_docker_with_data_volume()
+        ):
+            fallback = _default_download_dir()
+            if not cls._drive_root_trap_warned:
+                import logging as _logging
+
+                _logging.getLogger(__name__).warning(
+                    "DOWNLOAD_DIR=%r 은 Docker 절대경로 — Windows 네이티브 실행으로 감지되어 "
+                    "drive-root 트랩 방지 위해 %r 로 fallback",
+                    raw, fallback,
+                )
+                cls._drive_root_trap_warned = True
+            return fallback
+        return raw
+
+    # Windows drive-root trap 경고 중복 방지 플래그
+    _drive_root_trap_warned: bool = False
 
     @classmethod
     def save_settings(
