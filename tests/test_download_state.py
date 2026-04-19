@@ -260,14 +260,13 @@ def test_reconcile_no_op_when_store_already_correct(tmp_path: Path):
 # ── Config Windows /data 드라이브 루트 트랩 ───────────────────
 
 
-def test_config_windows_drive_root_trap_resolves_not_fallback(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+def test_config_windows_remaps_data_to_project_root(
+    monkeypatch: pytest.MonkeyPatch,
 ):
-    """Windows + unix 절대경로 DOWNLOAD_DIR + Docker 아님 → Path.resolve() 결과 유지.
+    """Windows + /data/downloads + non-Docker → 프로젝트 루트/data/downloads 매핑.
 
-    기존 구현은 `~/Downloads` 로 fallback 했으나, 사용자가 이미 해당 경로에
-    파일을 쌓아둔 경우(예: D:/data/downloads) 정합성이 깨지므로 fallback 대신
-    resolve 만 수행하고 경고를 남기는 것이 올바른 동작.
+    드라이브 루트 `D:\\data\\downloads` 트랩 방지 + `get_data_path()` 와 동일한
+    '프로젝트 내부' 원칙.
     """
     from src import config as config_module
 
@@ -284,16 +283,38 @@ def test_config_windows_drive_root_trap_resolves_not_fallback(
         )
 
         result = config_module.Config.get_download_dir()
-        # 경고 플래그는 켜져야 하지만, 경로는 fallback 이 아닌 Path.resolve() 결과
         assert config_module.Config._drive_root_trap_warned is True
-        # Path("/data/downloads").resolve() 는 현재 드라이브 루트 기반 절대경로
-        # (e.g. 'D:\\data\\downloads' 또는 'C:\\data\\downloads' — OS별 차이)
-        # raw 그대로가 아닌 OS 절대경로여야 하고, "data" 와 "downloads" 를 포함해야 함
-        assert "data" in result.lower() and "downloads" in result.lower()
-        # fallback 된 경우라면 Downloads 폴더 등 다른 경로가 나오는데 그 차단 확인:
-        # Path("/data/downloads").resolve() 는 Linux 에서도 "/data/downloads" 그대로.
-        # Windows 에서만 드라이브 루트 접두어 추가된 형태.
-        assert result != "/data/downloads" or "\\" in result or ":" in result
+
+        # 프로젝트 루트 기반이어야 함
+        project_root = Path(config_module.__file__).resolve().parent.parent
+        expected = str((project_root / "data" / "downloads").resolve())
+        assert result == expected
+    finally:
+        config_module.Config.DOWNLOAD_DIR = original_dir
+        config_module.Config._drive_root_trap_warned = original_warned
+        monkeypatch.setattr(config_module.sys, "platform", original_platform)
+
+
+def test_config_windows_remaps_generic_unix_path(monkeypatch: pytest.MonkeyPatch):
+    """/data 접두어 외 경로도 프로젝트 루트/data/<rest> 로 안전하게 매핑."""
+    from src import config as config_module
+
+    original_dir = config_module.Config.DOWNLOAD_DIR
+    original_warned = config_module.Config._drive_root_trap_warned
+    original_platform = getattr(config_module.sys, "platform", "")
+
+    try:
+        config_module.Config.DOWNLOAD_DIR = "/foo/bar"
+        config_module.Config._drive_root_trap_warned = False
+        monkeypatch.setattr(config_module.sys, "platform", "win32")
+        monkeypatch.setattr(
+            config_module, "_is_docker_with_data_volume", lambda: False,
+        )
+
+        result = config_module.Config.get_download_dir()
+        project_root = Path(config_module.__file__).resolve().parent.parent
+        expected = str((project_root / "data" / "foo" / "bar").resolve())
+        assert result == expected
     finally:
         config_module.Config.DOWNLOAD_DIR = original_dir
         config_module.Config._drive_root_trap_warned = original_warned

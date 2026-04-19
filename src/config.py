@@ -142,15 +142,15 @@ class Config:
     def get_download_dir(cls) -> str:
         """저장된 경로가 없으면 OS 기본 다운로드 폴더를 반환한다.
 
-        Windows 가드(SEC-DRIVE-ROOT-TRAP):
-            `DOWNLOAD_DIR=/data/downloads` 같은 Docker 용 unix 절대경로가
-            Windows 네이티브 실행 시 드라이브 루트(`D:\\data\\downloads`)로
-            해석된다. 이 자체는 유효한 Windows 경로이고, 실제 사용자가 Docker
-            와 native 를 혼용하는 환경에서는 이미 해당 위치에 파일을 쌓아
-            둔 경우가 많다. 따라서 fallback 으로 `~/Downloads` 같은 다른
-            위치로 바꾸지 않는다 — 기존 파일과의 정합성이 깨지기 때문.
-            대신 `Path.resolve()` 로 Windows 절대경로 포맷으로 변환하고
-            최초 한 번 경고 로그만 남긴다.
+        Windows + Docker 절대경로 매핑:
+            `.env` 의 `DOWNLOAD_DIR=/data/downloads` 는 Docker 컨테이너 기준
+            절대경로지만, Windows 네이티브 실행 시 그대로 쓰면 드라이브 루트
+            (`D:\\data\\downloads`) 로 해석돼 프로젝트 밖 엉뚱한 위치에 저장
+            된다. 이를 프로젝트 루트 `data/downloads/` 로 매핑하여
+            `get_data_path()` 와 같은 원칙(Docker 아닌 로컬은 프로젝트 루트)
+            을 따른다.
+            다른 곳에 저장하려면 `.env` 의 DOWNLOAD_DIR 을 명시적 Windows
+            경로 (예: `C:/Users/tgkim/Downloads/study-helper`) 로 지정.
         """
         raw = cls.DOWNLOAD_DIR
         if not raw:
@@ -161,16 +161,26 @@ class Config:
             and (raw.startswith("/") or raw.startswith("\\"))
             and not _is_docker_with_data_volume()
         ):
-            # Windows 에서 unix 스타일 절대경로는 현재 CWD 의 드라이브 루트로
-            # 해석된다. 명시적으로 resolve 해서 이후 파일시스템 비교가 일관되도록.
-            resolved = str(Path(raw).resolve())
+            # Docker unix 절대경로를 프로젝트 루트 data/ 하위로 리매핑.
+            # /data/downloads → <project>/data/downloads
+            # /data/logs      → <project>/data/logs
+            # /foo/bar        → <project>/data/foo/bar (fallback 매핑)
+            project_root = Path(__file__).resolve().parent.parent
+            rel = raw.lstrip("/\\")
+            if rel.startswith("data/") or rel.startswith("data\\"):
+                # `/data/…` 는 이미 `data/…` 와 매핑되도록 중복 접두어 제거
+                rel = rel[len("data") :].lstrip("/\\")
+                remapped = project_root / "data" / rel if rel else project_root / "data"
+            else:
+                remapped = project_root / "data" / rel
+            resolved = str(remapped.resolve())
             if not cls._drive_root_trap_warned:
                 import logging as _logging
 
                 _logging.getLogger(__name__).warning(
                     "DOWNLOAD_DIR=%r 은 Docker unix 절대경로 — Windows 네이티브에서는 "
-                    "드라이브 루트 %r 로 해석됩니다. 의도한 위치가 맞는지 확인하세요. "
-                    "다른 곳에 저장하려면 `.env` DOWNLOAD_DIR 을 Windows 경로(예: "
+                    "프로젝트 루트 기반 %r 로 매핑됩니다. 다른 위치를 원하시면 "
+                    "`.env` 의 DOWNLOAD_DIR 을 Windows 경로 (예: "
                     "`C:/Users/...`)로 수정하세요.",
                     raw, resolved,
                 )
