@@ -18,6 +18,7 @@ import requests
 from playwright.async_api import Page
 
 from src.downloader.result import (
+    REASON_UNSUPPORTED,
     REASON_URL_EXTRACT_CONTENT_PHP_MISSING,
     REASON_URL_EXTRACT_CONTENT_PHP_PARSE,
     REASON_URL_EXTRACT_EXCEPTION,
@@ -321,14 +322,37 @@ async def extract_video_url_detailed(page: Page, lecture_url: str) -> Extraction
 
         player_frame = await find_player_frame(page)
         if not player_frame:
-            _dl_log.warning(
-                "player frame 미탐지 — %s",
-                {"frames": [f.url[:80] for f in page.frames[:5]], **_diagnostics()},
+            # learningx LTI 전용 플레이어 감지 — commons iframe 이 구조적으로 없는
+            # 강의는 mp4 다운로드 불가(learningx 내부 스트림만 재생). 일반 재시도
+            # 대상이 아니라 UNSUPPORTED 로 분류해 자동 모드가 영원히 루프 돌지
+            # 않도록 한다. (lecture_type 가 MOVIE 라도 런타임에 감지되는 경우)
+            all_frame_urls = [f.url for f in page.frames]
+            has_learningx_lti = any(
+                "learningx/lti/lecture_attendance" in url for url in all_frame_urls
             )
+            has_commons = any("commons.ssu.ac.kr" in url for url in all_frame_urls)
+            diag = {
+                "frames": [u[:80] for u in all_frame_urls[:5]],
+                "learningx_lti_only": has_learningx_lti and not has_commons,
+                **_diagnostics(),
+            }
+
+            if has_learningx_lti and not has_commons:
+                _dl_log.warning(
+                    "다운로드 구조적 불가 — learningx LTI 전용 플레이어 (commons iframe 부재). "
+                    "url=%s diag=%s", lecture_url, diag,
+                )
+                return ExtractionResult(
+                    url=None,
+                    reason=REASON_UNSUPPORTED,
+                    diagnostics=diag,
+                )
+
+            _dl_log.warning("player frame 미탐지 — %s", diag)
             return ExtractionResult(
                 url=None,
                 reason=REASON_URL_EXTRACT_NO_PLAYER,
-                diagnostics=_diagnostics(),
+                diagnostics=diag,
             )
 
         # print(f"  [DBG] player frame 발견: {player_frame.url[:80]}")

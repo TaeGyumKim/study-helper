@@ -94,6 +94,10 @@ async def run_download(page, lec, course, audio_only: bool = False, both: bool =
         return DownloadResult(ok=False, reason=REASON_UNSUPPORTED)
 
     # 2. video URL 추출 (최대 3회 재시도)
+    # 구조적 실패(learningx LTI 전용, SSRF, path 위반 등)는 재시도해도 무의미하므로
+    # is_no_retry_reason 으로 즉시 탈출해 총 30초 대기 루프를 건너뛴다.
+    from src.downloader.result import is_no_retry_reason
+
     video_url = None
     last_extraction = None  # 마지막 시도의 ExtractionResult
     for attempt in range(1, _MAX_URL_RETRIES + 1):
@@ -104,6 +108,11 @@ async def run_download(page, lec, course, audio_only: bool = False, both: bool =
         last_extraction = await extract_video_url_detailed(page, lec.full_url)
         if last_extraction.url:
             video_url = last_extraction.url
+            break
+        if is_no_retry_reason(last_extraction.reason):
+            console.print(
+                f"  [yellow]구조적 실패 ({last_extraction.reason}) — 재시도 건너뜀[/yellow]"
+            )
             break
         if attempt < _MAX_URL_RETRIES:
             console.print(f"  [yellow]URL 추출 실패 ({last_extraction.reason}). {_RETRY_WAIT}초 후 재시도합니다...[/yellow]")

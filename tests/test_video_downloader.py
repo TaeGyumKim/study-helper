@@ -175,3 +175,49 @@ class TestExceptions:
 
     def test_suspicious_stub_is_runtime_error(self):
         assert issubclass(SuspiciousStubError, RuntimeError)
+
+
+# ── learningx LTI 전용 플레이어 감지 ──────────────────────────
+
+
+class TestLearningxOnlyDetection:
+    """find_player_frame 이 실패했을 때 frame URL 패턴으로 learningx LTI 전용
+    강의를 판정하는 로직의 단위 근거. extract_video_url_detailed 는 Playwright
+    Page 가 필요해 통합 테스트에 속하므로 여기서는 분기 조건만 pure 로 검증."""
+
+    def test_learningx_lti_only_pattern(self):
+        """commons 없이 learningx/lti/lecture_attendance 만 있으면 unsupported."""
+        frames = [
+            "https://canvas.ssu.ac.kr/courses/44038/modules/items/3265379",
+            "about:blank",
+            "https://canvas.ssu.ac.kr/learningx/lti/lecture_attendance/items/view/262643",
+        ]
+        has_learningx = any("learningx/lti/lecture_attendance" in u for u in frames)
+        has_commons = any("commons.ssu.ac.kr" in u for u in frames)
+        assert has_learningx and not has_commons
+
+    def test_both_commons_and_learningx_means_playable(self):
+        """commons 도 있으면 learningx 가 있어도 unsupported 아님 (일반 플로우)."""
+        frames = [
+            "https://canvas.ssu.ac.kr/learningx/lti/lecture_attendance/items/view/262632",
+            "https://commons.ssu.ac.kr/em/65d898ff270e4",
+        ]
+        has_learningx = any("learningx/lti/lecture_attendance" in u for u in frames)
+        has_commons = any("commons.ssu.ac.kr" in u for u in frames)
+        # 두 조건이 동시에 true 지만 "learningx only" 는 False
+        assert has_learningx
+        assert has_commons
+        assert not (has_learningx and not has_commons)
+
+
+# ── 재시도 정책: UNSUPPORTED 는 URL 추출 루프 즉시 탈출 ─────
+
+
+class TestExtractRetryShortCircuit:
+    def test_is_no_retry_reason_stops_extract_loop(self):
+        """run_download 의 URL 추출 3회 루프가 UNSUPPORTED 수신 시 즉시 break
+        되는지 단위 근거. 실제 루프는 integration 인데 is_no_retry_reason 이
+        True 만 반환하면 코드 흐름상 break 로 이어진다."""
+        assert is_no_retry_reason(REASON_UNSUPPORTED) is True
+        # URL 추출 단계의 세분화 reason 은 retry 대상(재시도해서 회복 가능)
+        assert is_no_retry_reason(REASON_URL_EXTRACT_FAILED) is False
