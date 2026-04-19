@@ -8,6 +8,7 @@
     python -m scripts.recover_missing --dry-run  # 목록만 출력
     python -m scripts.recover_missing --course <course_id>         # 특정 과목만
     python -m scripts.recover_missing --weeks 3주차 4주차           # 특정 주차만
+    python -m scripts.recover_missing --force-drift                # 파일 있지만 store 실패 기록된 drift 항목도 재다운로드
     python -m scripts.recover_missing --yes      # 확인 프롬프트 생략
 
 환경변수:
@@ -16,6 +17,7 @@
 
 구조적으로 다운로드 불가능한 항목(learningx)은 자동 제외된다.
 수집·실행·집계 로직은 src/service/recover_pipeline.py가 단일 소스로 제공한다.
+ProgressStore 는 복구 성공/실패 시 자동 업데이트되어 auto 모드와의 drift 방지.
 """
 
 from __future__ import annotations
@@ -41,10 +43,11 @@ elif not shutil.which("ffmpeg"):
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from src.config import Config  # noqa: E402
+from src.config import Config, get_data_path  # noqa: E402
 from src.downloader.result import DownloadResult  # noqa: E402
 from src.logger import get_logger  # noqa: E402
 from src.scraper.course_scraper import CourseScraper  # noqa: E402
+from src.service.progress_store import ProgressStore  # noqa: E402
 from src.service.recover_pipeline import MissingItem, collect_missing, run_recovery  # noqa: E402
 
 _log = get_logger("recover_missing_cli")
@@ -57,6 +60,10 @@ async def main() -> int:
     parser.add_argument(
         "--weeks", nargs="+", default=None,
         help="특정 주차만 대상 (예: --weeks 3주차 4주차)",
+    )
+    parser.add_argument(
+        "--force-drift", action="store_true",
+        help="파일은 있지만 progress_store 에 실패 reason 이 남은 drift 항목도 재다운로드",
     )
     parser.add_argument("--yes", "-y", action="store_true", help="확인 프롬프트 생략")
     args = parser.parse_args()
@@ -102,7 +109,16 @@ async def main() -> int:
         print(f"  과목 {len(courses)}개 강의 정보 로딩 중...")
         details = await scraper.fetch_all_details(courses, concurrency=3)
 
-        missing = collect_missing(courses, details)
+        # ProgressStore 로드 — 복구 결과를 자동 반영해 auto 모드와 drift 방지.
+        store = ProgressStore(path=get_data_path("auto_progress.json"))
+        store.load()
+
+        # --force-drift: 파일 있지만 store 에 실패 reason 남은 항목도 missing 으로 포함
+        missing = collect_missing(
+            courses, details,
+            store=store,
+            include_store_drift=args.force_drift,
+        )
 
         # --weeks 필터 (예: ["3주차", "4주차"] → 해당 주차 접두사 매칭)
         if args.weeks:
@@ -118,13 +134,19 @@ async def main() -> int:
 
         if not missing:
             print("  누락된 다운로드가 없습니다.")
+            # drift 만 있었을 수 있으므로 store 저장 (reconcile 효과가 있었다면 유지)
+            try:
+                store.save()
+            except Exception as save_exc:
+                _log.warning("progress_store 저장 실패: %s", save_exc)
             return 0
 
         print()
         print(f"  누락 {len(missing)}건:")
         for item in missing:
+            drift_tag = f" [drift: reason={item.store_reason}]" if item.store_reason else ""
             print(
-                f"    - [{item.course.long_name}] {item.lec.week_label} {item.lec.title} ({item.kind})"
+                f"    - [{item.course.long_name}] {item.lec.week_label} {item.lec.title} ({item.kind}){drift_tag}"
             )
         print()
 
@@ -154,7 +176,16 @@ async def main() -> int:
                 print(f"    → 실패 (사유={result.reason})")
 
         _log.info("CLI 복구 시작: %d건", len(missing))
-        report = await run_recovery(scraper, missing, on_progress=_on_progress)
+        try:
+            report = await run_recovery(
+                scraper, missing, on_progress=_on_progress, store=store,
+            )
+        finally:
+            # run_recovery 중간에 예외나 사용자 Ctrl+C 발생해도 지금까지의 상태는 저장
+            try:
+                store.save()
+            except Exception as save_exc:
+                _log.warning("progress_store 저장 실패: %s", save_exc)
 
         print()
         print("=" * 60)
