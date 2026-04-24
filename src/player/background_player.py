@@ -205,57 +205,9 @@ async def _ensure_playing(frame: Frame):
         pass
 
 
-async def _create_fake_webm(duration_sec: float) -> bytes:
-    """VP8 WebM 더미 영상 생성 (Chromium H.264 미지원 우회).
-
-    TemporaryDirectory 사용 — context manager 종료 시 자동 삭제.
-    2×2 픽셀 검정 프레임, 1fps, 극소 용량.
-    Chromium headless는 H.264를 지원하지 않지만 VP8/WebM은 기본 지원한다.
-    commonscdn MP4 요청을 이 영상으로 교체하면 Plan A(video DOM 폴링)가 동작한다.
-    """
-    import os
-    import tempfile
-    from pathlib import Path as _Path
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        output_path = _Path(tmpdir) / "fake.webm"
-        dur = str(int(duration_sec) + 2)
-        proc = await asyncio.create_subprocess_exec(
-            "ffmpeg",
-            "-y",
-            "-f",
-            "lavfi",
-            "-i",
-            "color=black:s=2x2:r=1",
-            "-f",
-            "lavfi",
-            "-i",
-            "anullsrc=r=8000:cl=mono",
-            "-t",
-            dur,
-            "-c:v",
-            "libvpx",
-            "-b:v",
-            "1k",
-            "-c:a",
-            "libopus",
-            "-b:a",
-            "8k",
-            "-map",
-            "0:v",
-            "-map",
-            "1:a",
-            str(output_path),
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
-            # SEC-010: subprocess 에 민감 env 상속 차단 — PATH 만 전달.
-            env={"PATH": os.environ.get("PATH", "")},
-        )
-        await proc.communicate()
-        if not output_path.exists() or output_path.stat().st_size == 0:
-            raise RuntimeError("ffmpeg 더미 영상 생성 실패")
-        return output_path.read_bytes()
-
+# STY-002/003 분할: 더미 영상 생성 로직은 src.player.fake_video 로 이전.
+# 기존 _create_fake_webm 이름으로 호출되는 사이트가 있으므로 re-export.
+from src.player.fake_video import create_fake_webm as _create_fake_webm  # noqa: E402
 
 # ── 진도 API 직접 호출 (Plan B) ──────────────────────────────────
 
