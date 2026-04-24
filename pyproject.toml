@@ -13,7 +13,7 @@ dependencies = [
     # 영상/음성 다운로드 (청크 스트리밍)
     "requests>=2.32.0",
     # STT — faster-whisper (CTranslate2 기반, torch 불필요)
-    "faster-whisper>=1.1.0",
+    "faster-whisper>=1.1.0,<2",
     # AI 요약
     "google-genai>=1.0.0,<2",
     "openai>=1.0.0,<2",
