@@ -247,7 +247,9 @@ async def run_download(page, lec, course, audio_only: bool = False, both: bool =
     )
 
     if not pipe_result.success and pipe_result.error == "CONVERT_FAILED":
-        console.print(f"  [bold red]mp3 변환 실패:[/bold red] {pipe_result.stage_errors.get('convert', '')}")
+        # TUI 는 원본 메시지 표시 (stage_messages) — leak 리스크 없는 로컬 컨텍스트
+        msg = pipe_result.stage_messages.get("convert") or pipe_result.stage_errors.get("convert", "")
+        console.print(f"  [bold red]mp3 변환 실패:[/bold red] {msg}")
         return DownloadResult(ok=False, reason=REASON_MP3_FAILED, mp4_path=mp4_path)
 
     # 최종 결과 요약
@@ -261,12 +263,16 @@ async def run_download(page, lec, course, audio_only: bool = False, both: bool =
         console.print(f"  [dim]{pipe_result.txt_path}[/dim]")
     if pipe_result.summary_path:
         console.print(f"  [dim]{pipe_result.summary_path}[/dim]")
+    # TUI 는 stage_messages (원본) 우선, 없으면 stage_errors (코드) fallback.
+    def _stage_display(stage: str) -> str:
+        return pipe_result.stage_messages.get(stage) or pipe_result.stage_errors.get(stage, "")
+
     if "transcribe" in pipe_result.stage_errors:
-        console.print(f"  [bold red]STT 실패:[/bold red] {pipe_result.stage_errors['transcribe']}")
+        console.print(f"  [bold red]STT 실패:[/bold red] {_stage_display('transcribe')}")
     if "summarize" in pipe_result.stage_errors:
-        console.print(f"  [yellow]AI 요약:[/yellow] {pipe_result.stage_errors['summarize']}")
+        console.print(f"  [yellow]AI 요약:[/yellow] {_stage_display('summarize')}")
     if "notify" in pipe_result.stage_errors:
-        console.print(f"  [yellow]텔레그램:[/yellow] {pipe_result.stage_errors['notify']}")
+        console.print(f"  [yellow]텔레그램:[/yellow] {_stage_display('notify')}")
 
     return DownloadResult(
         ok=True,

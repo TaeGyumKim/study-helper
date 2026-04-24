@@ -42,7 +42,13 @@ class PipelineProgress:
 
 @dataclass
 class PipelineResult:
-    """파이프라인 실행 결과."""
+    """파이프라인 실행 결과.
+
+    stage_errors vs stage_messages 분리 (SEC-005 + UX):
+    - `stage_errors`: API 응답용 **고정 코드** (type 이름). 민감 정보 leak 차단.
+    - `stage_messages`: 로컬 TUI/로그용 **원본 메시지** (type: msg). leak 리스크 없는
+      컨텍스트에서만 참조. WS/HTTP 응답에 직렬화하지 말 것.
+    """
 
     success: bool
     mp4_path: Path | None = None
@@ -51,6 +57,7 @@ class PipelineResult:
     summary_path: Path | None = None
     error: str = ""
     stage_errors: dict[str, str] = field(default_factory=dict)
+    stage_messages: dict[str, str] = field(default_factory=dict)
 
     def all_files(self) -> list[Path]:
         """파이프라인이 생성/유지한 모든 파일 경로 (ARCH-008).
@@ -161,6 +168,7 @@ async def run_pipeline(
         except Exception as e:
             _log.error("convert 단계 실패: %s: %s", type(e).__name__, e, exc_info=False)
             result.stage_errors["convert"] = type(e).__name__
+            result.stage_messages["convert"] = f"{type(e).__name__}: {e}"
             result.success = False
             result.error = "CONVERT_FAILED"
             return result
@@ -183,6 +191,7 @@ async def run_pipeline(
         except Exception as e:
             _log.error("transcribe 단계 실패: %s: %s", type(e).__name__, e, exc_info=False)
             result.stage_errors["transcribe"] = type(e).__name__
+            result.stage_messages["transcribe"] = f"{type(e).__name__}: {e}"
         finally:
             # STT 모델 메모리 해제 (수백 MB) — 파이프라인 완료 후 불필요
             from src.stt.transcriber import safe_unload
@@ -196,6 +205,7 @@ async def run_pipeline(
 
         if not is_transcript_usable(result.txt_path):
             result.stage_errors["summarize"] = "TRANSCRIPT_EMPTY"
+            result.stage_messages["summarize"] = "STT 결과 없음 — 요약 생략 (무음/저음량 영상 가능)"
             await _emit(PipelineStage.SUMMARIZE, 1.0, "STT 결과 없음 — 요약 생략")
         else:
             await _emit(PipelineStage.SUMMARIZE, 0.0, "AI 요약 중...")
@@ -218,6 +228,7 @@ async def run_pipeline(
             except Exception as e:
                 _log.error("summarize 단계 실패: %s: %s", type(e).__name__, e, exc_info=False)
                 result.stage_errors["summarize"] = type(e).__name__
+                result.stage_messages["summarize"] = f"{type(e).__name__}: {e}"
 
     # ── 4. 텔레그램 알림 ─────────────────────────────────────────
     if result.summary_path and tg_token and tg_chat_id:
@@ -242,8 +253,10 @@ async def run_pipeline(
             await _emit(PipelineStage.NOTIFY, 1.0, "전송 완료" if ok else "전송 실패")
             if not ok:
                 result.stage_errors["notify"] = "NOTIFY_FAILED"
+                result.stage_messages["notify"] = "Telegram 전송 실패 (토큰/Chat ID 확인 필요)"
         except Exception as e:
             _log.error("notify 단계 실패: %s: %s", type(e).__name__, e, exc_info=False)
             result.stage_errors["notify"] = type(e).__name__
+            result.stage_messages["notify"] = f"{type(e).__name__}: {e}"
 
     return result
