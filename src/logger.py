@@ -112,6 +112,49 @@ def get_logger(name: str = "study_helper") -> logging.Logger:
 
 
 _error_loggers: dict[str, tuple[logging.Logger, Path]] = {}
+_error_retention_cleaned: bool = False
+
+# LOG-SYS-2: get_error_logger 가 만드는 YYYYMMDD_HHMMSS_<action>.log 보존 기간 (일).
+# TimedRotatingFileHandler 의 backupCount=7 은 study_helper.log 만 해당하므로
+# 이 정책이 없으면 에러 전용 로그가 무한 누적된다.
+_ERROR_LOG_RETENTION_DAYS = 14
+
+
+def _cleanup_old_error_logs(logs_dir: Path) -> None:
+    """14일 초과 에러 로그 파일을 삭제한다 (LOG-SYS-2).
+
+    `study_helper.log*` 는 대상 외. `YYYYMMDD_HHMMSS_<action>.log` 파일 이름의
+    앞 8자리(YYYYMMDD)로 날짜를 판정한다. 파싱 실패 시 스킵.
+    프로세스 당 1회만 수행(캐시 플래그).
+    """
+    global _error_retention_cleaned
+    if _error_retention_cleaned:
+        return
+    _error_retention_cleaned = True
+
+    cutoff_date = datetime.now(_KST).date()
+    cutoff_ordinal = cutoff_date.toordinal() - _ERROR_LOG_RETENTION_DAYS
+
+    try:
+        files = list(logs_dir.glob("*_*.log"))
+    except OSError:
+        return
+
+    for path in files:
+        if path.name.startswith("study_helper"):
+            continue
+        stem = path.stem
+        if len(stem) < 8 or not stem[:8].isdigit():
+            continue
+        try:
+            file_date = datetime.strptime(stem[:8], "%Y%m%d").date()
+        except ValueError:
+            continue
+        if file_date.toordinal() < cutoff_ordinal:
+            try:
+                path.unlink()
+            except OSError:
+                pass
 
 
 def _cleanup_stale_error_loggers(today: str) -> None:
@@ -154,6 +197,7 @@ def get_error_logger(action: str) -> tuple[logging.Logger, Path]:
 
     logs_dir = _logs_dir()
     logs_dir.mkdir(parents=True, exist_ok=True)
+    _cleanup_old_error_logs(logs_dir)
 
     timestamp = datetime.now(_KST).strftime("%Y%m%d_%H%M%S")
     log_path = logs_dir / f"{timestamp}_{action}.log"
