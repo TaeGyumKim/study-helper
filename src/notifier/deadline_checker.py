@@ -121,14 +121,17 @@ def find_approaching_deadlines(
     details: list[CourseDetail | None],
     notified: set[str] | None = None,
     now: datetime | None = None,
+    collect_keys: set[str] | None = None,
 ) -> list[DeadlineItem]:
     """마감 임박 항목을 검색한다 (순수 로직, 알림 전송 없음).
 
     Args:
-        courses:  과목 목록
-        details:  과목별 강의 상세 (courses와 동일 순서)
-        notified: 이미 알림 전송된 키 집합 (None이면 빈 set)
-        now:      현재 시각 (테스트 시 주입 가능)
+        courses:      과목 목록
+        details:      과목별 강의 상세 (courses와 동일 순서)
+        notified:     이미 알림 전송된 키 집합 (None이면 빈 set)
+        now:          현재 시각 (테스트 시 주입 가능)
+        collect_keys: ARCH-015 — non-None 전달 시 모든 강의x threshold dedup 키를
+                      이 집합에 추가. stale 키 정리에 사용. 비디오/완료 강의도 포함.
 
     Returns:
         마감 임박 DeadlineItem 목록
@@ -145,6 +148,11 @@ def find_approaching_deadlines(
             continue
         for week in detail.weeks:
             for lec in week.lectures:
+                # 전체 강의x threshold dedup 키를 valid_keys 집약 — 루프 1회로 해결
+                if collect_keys is not None:
+                    for threshold in _THRESHOLDS:
+                        collect_keys.add(_make_dedup_key(course, lec, threshold))
+
                 if lec.lecture_type in VIDEO_LECTURE_TYPES:
                     continue
                 # 완료 판별: completion 또는 attendance 둘 중 하나라도 완료면 건너뜀
@@ -210,21 +218,14 @@ def check_and_notify_deadlines(
 
     notified = _load_notified()
 
-    # 만료 키 정리: 현재 유효한 강의의 dedup 키만 유지하여 무한 성장 방지
+    # ARCH-015: find_approaching_deadlines 에 valid_keys 집합을 주입해 강의 순회를
+    # 1회로 통합. stale 키 정리는 루프 종료 후 수행.
     valid_keys: set[str] = set()
-    for course, detail in zip(courses, details, strict=False):
-        if detail is None:
-            continue
-        for week in detail.weeks:
-            for lec in week.lectures:
-                for threshold in _THRESHOLDS:
-                    valid_keys.add(_make_dedup_key(course, lec, threshold))
+    items = find_approaching_deadlines(courses, details, notified=notified, collect_keys=valid_keys)
     stale_keys = notified - valid_keys
     if stale_keys:
         notified -= stale_keys
         _save_notified(notified)
-
-    items = find_approaching_deadlines(courses, details, notified=notified)
 
     if not items:
         return 0
