@@ -100,6 +100,10 @@ def main():
         host="127.0.0.1",
         port=port,
         log_level="warning",
+        # SEC-004: WebSocket 페이로드 1MB 제한. 기본 16MB 는 미인증 클라이언트가
+        # 큰 페이로드를 반복 전송하는 메모리 DoS 경로가 된다. per-IP 레이트 리밋은
+        # slowapi 의존성이 필요하므로 별도 이슈로 분리 (옵션 A 채택).
+        ws_max_size=1_048_576,
     )
 
 
