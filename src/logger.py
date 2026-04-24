@@ -13,6 +13,38 @@ from datetime import datetime, timedelta, timezone
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 
+from src.util.log_sanitize import mask_sensitive
+
+
+class SensitiveFilter(logging.Filter):
+    """LOG-SYS-3: 모든 log record 메시지에 PII/OAuth 마스킹 적용.
+
+    `record.msg` 와 `record.args` 에 있는 문자열을 mask_sensitive 로 치환한다.
+    player 등에서 명시적으로 이미 마스킹된 값에 대해서도 멱등(재적용 무해).
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            if isinstance(record.msg, str):
+                record.msg = mask_sensitive(record.msg)
+            if record.args:
+                if isinstance(record.args, tuple):
+                    record.args = tuple(
+                        mask_sensitive(a) if isinstance(a, str) else a for a in record.args
+                    )
+                elif isinstance(record.args, dict):
+                    record.args = {
+                        k: (mask_sensitive(v) if isinstance(v, str) else v)
+                        for k, v in record.args.items()
+                    }
+        except Exception:
+            # 로그 필터 자체의 실패가 앱을 중단시키면 안 된다.
+            pass
+        return True
+
+
+_SENSITIVE_FILTER = SensitiveFilter()
+
 # KST (UTC+9) — src.config.KST 와 동일 정의.
 # Docker 컨테이너에서 TZ 미설정 시에도 일관된 날짜로 로그 파일명을 생성하기 위해
 # logger 내부에서도 aware datetime 을 사용한다 (circular import 회피용 inline 정의).
@@ -65,6 +97,7 @@ def get_logger(name: str = "study_helper") -> logging.Logger:
                 datefmt="%Y-%m-%d %H:%M:%S",
             )
         )
+        _app_logger.addFilter(_SENSITIVE_FILTER)  # LOG-SYS-3: 전역 마스킹
         _app_logger.addHandler(file_handler)
         # SEC-008: 로그 파일 권한 0o600 (POSIX). Windows 는 no-op.
         try:
@@ -138,6 +171,7 @@ def get_error_logger(action: str) -> tuple[logging.Logger, Path]:
                 datefmt="%Y-%m-%d %H:%M:%S",
             )
         )
+        logger.addFilter(_SENSITIVE_FILTER)  # LOG-SYS-3
         logger.addHandler(handler)
         # SEC-008: 에러 로그 파일도 0o600 (POSIX). Windows 는 no-op.
         try:
