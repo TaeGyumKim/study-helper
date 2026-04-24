@@ -1,4 +1,4 @@
-"""공용 유틸리티 함수."""
+"""URL 공용 유틸리티."""
 
 from urllib.parse import urlparse
 

@@ -37,7 +37,7 @@ from src.downloader.result import (
     SuspiciousStubError,
 )
 from src.logger import get_error_logger
-from src.utils import safe_url
+from src.util.url import safe_url
 
 _MAX_URL_RETRIES = 3
 _RETRY_WAIT = 10  # seconds

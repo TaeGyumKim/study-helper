@@ -17,7 +17,7 @@ from rich.progress import (
 from src.logger import get_error_logger
 from src.player.background_player import PlaybackState, play_lecture
 from src.scraper.models import LectureItem
-from src.utils import safe_url
+from src.util.url import safe_url
 
 console = Console()
 
