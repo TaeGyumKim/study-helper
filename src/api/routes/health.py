@@ -8,10 +8,12 @@ router = APIRouter()
 
 
 @router.get("/health")
-def health():
+def health() -> dict[str, str]:
+    """서버 가동 여부 체크."""
     return {"status": "ok"}
 
 
 @router.get("/version")
-def version():
+def version() -> dict[str, str]:
+    """애플리케이션 버전 조회."""
     return {"version": APP_VERSION}

@@ -65,7 +65,7 @@ class ResolvePathRequest(BaseModel):
 
 
 @router.post("/resolve-path")
-async def resolve_path(body: ResolvePathRequest):
+async def resolve_path(body: ResolvePathRequest) -> dict[str, str]:
     """다운로드 경로를 결정한다.
 
     LOG-001: 순수 경로 계산이라 블로킹은 없으나 transcribe/summarize 와
@@ -90,7 +90,7 @@ def _validate_path_in_download_dir(file_path: str) -> Path:
 
 
 @router.post("/convert")
-async def convert(body: ConvertRequest):
+async def convert(body: ConvertRequest) -> dict[str, str]:
     """mp4를 mp3로 변환한다.
 
     LOG-001: ffmpeg subprocess 가 blocking 이므로 run_in_executor 로 위임해
@@ -105,7 +105,7 @@ async def convert(body: ConvertRequest):
 
 
 @router.post("/transcribe")
-async def transcribe(body: TranscribeRequest):
+async def transcribe(body: TranscribeRequest) -> dict[str, str]:
     """음성을 텍스트로 변환한다 (STT)."""
     if body.model_size not in _ALLOWED_WHISPER_MODELS:
         raise HTTPException(status_code=400, detail=f"허용되지 않는 모델: {body.model_size}")
@@ -125,7 +125,7 @@ async def transcribe(body: TranscribeRequest):
 
 
 @router.post("/summarize")
-async def summarize(body: SummarizeRequest):
+async def summarize(body: SummarizeRequest) -> dict[str, str]:
     """텍스트를 AI로 요약한다."""
     if body.agent not in _ALLOWED_AI_AGENTS:
         raise HTTPException(status_code=400, detail=f"허용되지 않는 AI 에이전트: {body.agent}")
@@ -146,7 +146,7 @@ async def summarize(body: SummarizeRequest):
 
 
 @router.websocket("/pipeline")
-async def pipeline_ws(ws: WebSocket):
+async def pipeline_ws(ws: WebSocket) -> None:
     """다운로드 후속 파이프라인을 WebSocket으로 실행한다.
 
     첫 번째 메시지로 토큰 인증 후 PipelineRequest를 수신하면,

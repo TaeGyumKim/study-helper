@@ -1,3 +1,10 @@
+"""Canvas LMS 과목/주차/강의 스크래퍼.
+
+Playwright headless 브라우저 세션을 하나 유지하면서 대시보드 → 과목 → 강의
+목록 iframe(`tool_content`) → `.xnmb-module-*` DOM 순서로 파싱한다.
+병렬 수집 시 재로그인 경합은 `_login_lock` + `_session_restored` flag 로 조정.
+"""
+
 import asyncio
 import re
 from collections.abc import Callable
@@ -34,6 +41,12 @@ _TYPE_CLASS_MAP = {
 
 
 class CourseScraper:
+    """LMS 로그인 + 과목/강의 DOM 스크래핑을 담당한다.
+
+    Playwright async_api 기반. 인스턴스 당 Browser/Context/Page 를 하나 보유하며
+    `start()` → `fetch_courses()` / `fetch_all_details()` → `close()` 순으로 사용.
+    """
+
     def __init__(
         self,
         username: str,

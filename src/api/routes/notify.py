@@ -18,7 +18,7 @@ class DeadlineCheckRequest(BaseModel):
 
 
 @router.post("/deadline-check")
-def deadline_check():
+def deadline_check() -> dict[str, object]:
     """마감 임박 항목을 체크하고 텔레그램으로 알림을 전송한다.
 
     NOTE: 현재는 코어 내부 데이터(scraper 결과)가 필요하므로,
@@ -40,7 +40,7 @@ class NotifyRequest(BaseModel):
 
 
 @router.post("/telegram")
-def send_notification(body: NotifyRequest):
+def send_notification(body: NotifyRequest) -> dict[str, object]:
     """텔레그램 알림을 전송한다."""
     tg = Config.get_telegram_credentials()
     if not tg:

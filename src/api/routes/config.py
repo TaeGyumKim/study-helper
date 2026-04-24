@@ -44,7 +44,7 @@ class TelegramUpdate(BaseModel):
 
 
 @router.get("", response_model=SettingsResponse)
-def get_settings():
+def get_settings() -> SettingsResponse:
     """현재 설정을 조회한다."""
     return SettingsResponse(
         download_dir=Config.get_download_dir(),
@@ -63,7 +63,7 @@ def get_settings():
 
 
 @router.put("")
-def update_settings(body: SettingsUpdate):
+def update_settings(body: SettingsUpdate) -> dict[str, str]:
     """설정을 저장한다."""
     Config.save_settings(
         download_dir=body.download_dir,
@@ -79,7 +79,7 @@ def update_settings(body: SettingsUpdate):
 
 
 @router.put("/telegram")
-def update_telegram(body: TelegramUpdate):
+def update_telegram(body: TelegramUpdate) -> dict[str, str]:
     """텔레그램 설정을 저장한다."""
     Config.save_telegram(
         enabled=body.enabled,
@@ -91,7 +91,7 @@ def update_telegram(body: TelegramUpdate):
 
 
 @router.post("/telegram/verify")
-def verify_telegram(body: TelegramUpdate):
+def verify_telegram(body: TelegramUpdate) -> dict[str, object]:
     """텔레그램 봇 연결을 테스트한다."""
     from src.notifier.telegram_notifier import verify_bot
 
@@ -100,6 +100,6 @@ def verify_telegram(body: TelegramUpdate):
 
 
 @router.get("/credentials")
-def has_credentials():
+def has_credentials() -> dict[str, bool]:
     """저장된 자격증명 존재 여부를 반환한다."""
     return {"has_credentials": Config.has_credentials()}

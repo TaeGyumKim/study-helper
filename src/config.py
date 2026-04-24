@@ -1,3 +1,11 @@
+"""환경변수 기반 앱 설정 컨테이너.
+
+.env 파일을 로드한 뒤 `Config` 클래스의 클래스 변수로 노출한다.
+민감 값(비밀번호, API 키, 봇 토큰) 은 `enc:` 접두사로 `.env` 에 암호화 저장되며
+접근 시점에 자동 복호화된다. 경로 해결 유틸(`get_data_base` / `get_data_path` /
+`get_logs_path`) 과 재시도 정책(`RetryPolicy`) 도 본 모듈에서 제공한다.
+"""
+
 import os
 import sys
 from datetime import timedelta, timezone
@@ -125,6 +133,9 @@ def get_logs_path() -> Path:
 
 
 class Config:
+    """앱 전역 설정 컨테이너. 모든 필드는 클래스 변수로 공개되며
+    `.env` 로부터 모듈 import 시점에 로드된다. 민감 필드는 Fernet 으로 암호화 저장."""
+
     LMS_USER_ID: str = _load_credential("LMS_USER_ID")
     LMS_PASSWORD: str = _load_credential("LMS_PASSWORD")
     GOOGLE_API_KEY: str = _load_credential("GOOGLE_API_KEY")

@@ -1,3 +1,5 @@
+"""Canvas LMS 스크래핑 결과의 데이터 모델 (dataclass/Enum)."""
+
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -5,6 +7,8 @@ _BASE_URL = "https://canvas.ssu.ac.kr"
 
 
 class LectureType(Enum):
+    """LMS 강의 항목 타입 — 영상/과제/퀴즈 등 처리 방식 분기에 사용."""
+
     MOVIE = "movie"
     READYSTREAM = "readystream"
     SCREENLECTURE = "screenlecture"
