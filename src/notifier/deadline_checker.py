@@ -102,11 +102,16 @@ def _load_notified() -> set[str]:
 
 
 def _save_notified(notified: set[str]) -> None:
+    """deadline_notified.json 을 원자적으로 저장한다 (LOG-003).
+
+    자동 모드 + 수동 deadline check 동시 실행 시 lost update 를 방지하기 위해
+    atomic_write_text + file_lock 공용 모듈을 사용한다.
+    """
+    from src.util.atomic_write import atomic_write_text, file_lock
+
     try:
-        _DEADLINE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = _DEADLINE_FILE.with_suffix(".json.tmp")
-        tmp_path.write_text(json.dumps(sorted(notified)), encoding="utf-8")
-        tmp_path.replace(_DEADLINE_FILE)
+        with file_lock(_DEADLINE_FILE):
+            atomic_write_text(_DEADLINE_FILE, json.dumps(sorted(notified)))
     except Exception as e:
         _log.warning("deadline_notified.json 저장 실패: %s", e)
 

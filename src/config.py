@@ -289,23 +289,9 @@ class Config:
             if key not in updated_keys:
                 new_lines.append(f"{key}={value}\n")
 
-        # atomic write: 임시 파일에 먼저 쓴 뒤 rename으로 대체 (쓰기 중 크래시 시 원본 보존)
-        import tempfile
+        # SEC-001 / ARCH-011: atomic_write_text 공용 모듈 사용. 0o600 권한 + fsync + replace 일원화.
+        # 다중 프로세스 동시 저장 (자동 모드 + CLI 스크립트) 시 lost update 방지를 위해 file_lock 으로 감싼다.
+        from src.util.atomic_write import atomic_write_text, file_lock
 
-        fd, tmp_str = tempfile.mkstemp(dir=env_path.parent, prefix=".env.", suffix=".tmp")
-        tmp_path = Path(tmp_str)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                f.writelines(new_lines)
-                f.flush()
-                os.fsync(f.fileno())
-            tmp_path.replace(env_path)
-            # SEC-001: .env 는 LMS 비밀번호·API 키·봇 토큰(암호화됨) 을 담으므로
-            # POSIX 에서는 0o600 강제. Windows 는 chmod 가 no-op 이며 OSError 시 무시.
-            try:
-                env_path.chmod(0o600)
-            except OSError:
-                pass
-        except Exception:
-            tmp_path.unlink(missing_ok=True)
-            raise
+        with file_lock(env_path):
+            atomic_write_text(env_path, "".join(new_lines), mode=0o600)
