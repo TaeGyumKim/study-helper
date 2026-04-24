@@ -99,6 +99,19 @@ def unload_model() -> None:
         _release_model()
 
 
+def safe_unload() -> None:
+    """unload_model 을 안전하게 호출한다 (ARCH-014).
+
+    STT 의존성(faster-whisper) 이 로드 안 된 경우/이미 해제된 경우에도
+    예외 없이 no-op. 호출 사이트 6곳에서 반복하던 try/import/bare except
+    패턴을 축약한다.
+    """
+    try:
+        unload_model()
+    except Exception:
+        pass
+
+
 def transcribe(audio_path: Path, model_size: str = "base", language: str = "") -> Path:
     """
     faster-whisper로 음성 파일을 텍스트로 변환한다.

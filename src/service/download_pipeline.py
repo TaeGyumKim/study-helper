@@ -185,12 +185,9 @@ async def run_pipeline(
             result.stage_errors["transcribe"] = type(e).__name__
         finally:
             # STT 모델 메모리 해제 (수백 MB) — 파이프라인 완료 후 불필요
-            try:
-                from src.stt.transcriber import unload_model
+            from src.stt.transcriber import safe_unload
 
-                await loop.run_in_executor(None, unload_model)
-            except Exception:
-                pass
+            await loop.run_in_executor(None, safe_unload)
 
     # ── 3. AI 요약 ───────────────────────────────────────────────
     if result.txt_path and ai_enabled and ai_api_key:

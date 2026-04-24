@@ -119,12 +119,9 @@ async def transcribe(body: TranscribeRequest):
         return {"txt_path": str(txt_path)}
     finally:
         # STT 모델 메모리 해제 (수백 MB) — API 서버 장시간 운영 시 메모리 누적 방지
-        try:
-            from src.stt.transcriber import unload_model
+        from src.stt.transcriber import safe_unload
 
-            await loop.run_in_executor(None, unload_model)
-        except Exception:
-            pass
+        await loop.run_in_executor(None, safe_unload)
 
 
 @router.post("/summarize")

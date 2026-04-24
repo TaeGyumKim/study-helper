@@ -445,12 +445,9 @@ async def run_auto_mode(
             _notify_download_gaps(missing_entries)
 
             # STT 모델 메모리 해제 (다음 사이클까지 필요 없음)
-            try:
-                from src.stt.transcriber import unload_model
+            from src.stt.transcriber import safe_unload
 
-                unload_model()
-            except Exception as e:
-                _log.debug("STT 모델 해제 실패: %s", e)
+            safe_unload()
 
             console.print()
             console.print("  [bold green]이번 스케줄 처리 완료.[/bold green]")
@@ -465,12 +462,9 @@ async def run_auto_mode(
         except (asyncio.CancelledError, Exception):
             pass
         # STT 모델 메모리 최종 해제
-        try:
-            from src.stt.transcriber import unload_model
+        from src.stt.transcriber import safe_unload
 
-            unload_model()
-        except Exception:
-            pass
+        safe_unload()
 
     console.print()
     console.print("  [dim]자동 모드를 종료합니다.[/dim]")

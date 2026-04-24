@@ -149,12 +149,9 @@ async def run():
         if scraper:
             await scraper.close()
         # STT 모델이 로드되어 있으면 해제
-        try:
-            from src.stt.transcriber import unload_model
+        from src.stt.transcriber import safe_unload
 
-            unload_model()
-        except Exception:
-            pass
+        safe_unload()
 
 
 async def _try_login(user_id: str, password: str) -> CourseScraper | None:
