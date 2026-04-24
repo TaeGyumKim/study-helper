@@ -21,9 +21,9 @@ class DeadlineCheckRequest(BaseModel):
 def deadline_check() -> dict[str, object]:
     """마감 임박 항목을 체크하고 텔레그램으로 알림을 전송한다.
 
-    NOTE: 현재는 코어 내부 데이터(scraper 결과)가 필요하므로,
-    Electron이 LMS 데이터를 수집한 후 Python 코어의
-    check_and_notify_deadlines를 직접 호출하는 구조로 변경 예정.
+    TODO(electron-integration): Electron 측이 LMS 스크래핑 결과(courses/details)를
+    POST body 로 넘기도록 DeadlineCheckRequest 를 채워, 내부에서
+    `check_and_notify_deadlines` 를 호출하는 구조로 교체. 현재는 스텁 상태.
     """
     tg = Config.get_telegram_credentials()
     if not tg:
