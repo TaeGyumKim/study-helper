@@ -232,7 +232,6 @@ async def run_download(page, lec, course, audio_only: bool = False, both: bool =
             console.print(f"  [green]{p.message}[/green]")
 
     tg = Config.get_telegram_credentials()
-    ai_agent = Config.AI_AGENT or "gemini"
     pipe_result = await run_pipeline(
         mp4_path=mp4_path,
         course_name=course.long_name,
@@ -244,9 +243,9 @@ async def run_download(page, lec, course, audio_only: bool = False, both: bool =
         stt_model=Config.WHISPER_MODEL or "base",
         stt_language=Config.STT_LANGUAGE,
         ai_enabled=Config.AI_ENABLED == "true",
-        ai_agent=ai_agent,
-        ai_api_key=Config.GOOGLE_API_KEY if ai_agent == "gemini" else Config.OPENAI_API_KEY,
-        ai_model=Config.GEMINI_MODEL if ai_agent == "gemini" else "",
+        ai_agent=Config.AI_AGENT or "gemini",
+        ai_api_key=Config.get_ai_api_key(),
+        ai_model=Config.get_ai_model(),
         ai_extra_prompt=Config.SUMMARY_PROMPT_EXTRA,
         tg_token=tg[0] if tg and Config.TELEGRAM_ENABLED == "true" else "",
         tg_chat_id=tg[1] if tg and Config.TELEGRAM_ENABLED == "true" else "",

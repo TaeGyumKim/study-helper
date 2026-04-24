@@ -52,6 +52,14 @@ class PipelineResult:
     error: str = ""
     stage_errors: dict[str, str] = field(default_factory=dict)
 
+    def all_files(self) -> list[Path]:
+        """파이프라인이 생성/유지한 모든 파일 경로 (ARCH-008).
+
+        auto_delete 대상 조립 시 [mp4, mp3, txt, summary] 리스트를 수작업으로
+        구성하던 패턴을 집약한다.
+        """
+        return [f for f in (self.mp4_path, self.mp3_path, self.txt_path, self.summary_path) if f]
+
 
 # 콜백 타입: 동기(None 반환) 와 비동기(Awaitable 반환) 둘 다 수용.
 # _emit 내부에서 inspect.isawaitable 로 분기하여 await 여부를 결정한다.
@@ -219,7 +227,7 @@ async def run_pipeline(
         await _emit(PipelineStage.NOTIFY, 0.0, "텔레그램 전송 중...")
         files_to_delete = None
         if tg_auto_delete:
-            files_to_delete = [f for f in [result.mp4_path, result.mp3_path, result.txt_path, result.summary_path] if f]
+            files_to_delete = result.all_files()
         try:
             from src.notifier.telegram_notifier import notify_summary_complete
 

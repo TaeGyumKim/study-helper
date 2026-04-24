@@ -134,6 +134,22 @@ class Config:
         return bool(cls.LMS_USER_ID and cls.LMS_PASSWORD)
 
     @classmethod
+    def get_ai_api_key(cls) -> str:
+        """현재 AI_AGENT 에 해당하는 API 키를 반환 (ARCH-008)."""
+        if cls.AI_AGENT == "gemini":
+            return cls.GOOGLE_API_KEY
+        if cls.AI_AGENT == "openai":
+            return cls.OPENAI_API_KEY
+        return ""
+
+    @classmethod
+    def get_ai_model(cls) -> str:
+        """현재 AI_AGENT 에 해당하는 모델 이름을 반환."""
+        if cls.AI_AGENT == "gemini":
+            return cls.GEMINI_MODEL
+        return ""
+
+    @classmethod
     def has_settings(cls) -> bool:
         """최초 설정이 완료됐는지 확인 (다운로드 규칙 기준)."""
         return bool(cls.DOWNLOAD_RULE)
