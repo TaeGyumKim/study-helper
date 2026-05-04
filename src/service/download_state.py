@@ -131,6 +131,13 @@ def reconcile_store_with_filesystem(
       2. 파일은 존재하는데 store 는 downloaded=False 또는 reason 이 남아있음
          → `mark_download_confirmed_from_filesystem`
 
+    BUG-4: 이전에는 `lec.completion == "completed"` 인 강의만 reconcile 했다.
+    그러나 LMS 가 일시적으로 incomplete 로 표시 중인 강의도 디스크에 파일이
+    실재한다면 store 의 `downloaded` 상태는 fs 사실을 따라야 한다 — 그렇지 않으면
+    매 사이클 동일 파일을 재다운로드 시도하는 catastrophic loop 가 된다.
+    `played` 상태는 별도 (auto 루프의 mark_incomplete) 가 LMS 신호로 관리하므로
+    여기서는 손대지 않는다.
+
     Returns:
         (unsupported_marked, downloaded_confirmed) 건수
     """
@@ -140,9 +147,8 @@ def reconcile_store_with_filesystem(
         if detail is None:
             continue
         for lec in detail.all_video_lectures:
-            if lec.completion != "completed":
-                continue
             if not lec.is_downloadable:
+                # learningx 같은 구조적 미지원은 LMS completion 과 무관하게 마킹
                 entry = store.get(lec.full_url)
                 if entry is None or entry.downloadable is not False:
                     store.mark_unsupported(lec.full_url, reason=REASON_UNSUPPORTED)
@@ -151,6 +157,7 @@ def reconcile_store_with_filesystem(
             if file_present(download_dir, course.long_name, lec, rule):
                 entry = store.get(lec.full_url)
                 # 파일은 있는데 store 가 "미완료/실패" 상태면 정정한다.
+                # LMS completion 과 무관하게 — 디스크가 SoT.
                 if entry is None or entry.downloaded is not True or entry.reason is not None:
                     store.mark_download_confirmed_from_filesystem(lec.full_url)
                     confirmed += 1
