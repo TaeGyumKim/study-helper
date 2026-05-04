@@ -77,7 +77,7 @@ def list_missing_items(
             if not lec.is_downloadable:
                 continue
 
-            mp4, mp3 = expected_paths(download_dir, course.long_name, lec)
+            mp4, mp3 = expected_paths(download_dir, course, lec)
             has_video = mp4.exists()
             has_audio = mp3.exists()
 
@@ -154,7 +154,7 @@ def reconcile_store_with_filesystem(
                     store.mark_unsupported(lec.full_url, reason=REASON_UNSUPPORTED)
                     unsupported += 1
                 continue
-            if file_present(download_dir, course.long_name, lec, rule):
+            if file_present(download_dir, course, lec, rule):
                 entry = store.get(lec.full_url)
                 # 파일은 있는데 store 가 "미완료/실패" 상태면 정정한다.
                 # LMS completion 과 무관하게 — 디스크가 SoT.

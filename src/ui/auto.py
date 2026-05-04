@@ -171,9 +171,9 @@ def _save_store(store: ProgressStore) -> None:
         _log.warning("auto_progress.json 저장 실패: %s", e)
 
 
-def _is_file_present(course: "Course", lec: "LectureItem", rule: str) -> bool:
+def _is_file_present(course: Course, lec: LectureItem, rule: str) -> bool:
     """DOWNLOAD_RULE에 따라 기대되는 파일이 모두 존재하는지 확인한다."""
-    return file_present(Config.get_download_dir(), course.long_name, lec, rule)
+    return file_present(Config.get_download_dir(), course, lec, rule)
 
 
 def _configure_schedule() -> list[int]:

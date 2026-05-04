@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from src.downloader.paths import expected_paths
 from src.scraper.models import Course, CourseDetail, LectureItem, LectureType, Week
 from src.service.download_state import (
     list_missing_items,
@@ -77,19 +78,10 @@ def test_list_missing_files_present(tmp_path: Path):
     lec = _make_lec("3316344")
     detail = _make_detail([lec])
 
-    # 실제 파일 생성 (make_filepath 구조: 과목/N주차/강의명.mp4)
-    lecture_root = tmp_path / course.long_name / "6주차"
-    _touch(lecture_root / "6주차(총 8주 중) 비전채플 삭개오 이야기.mp4")
-    _touch(lecture_root / "6주차(총 8주 중) 비전채플 삭개오 이야기.mp3")
-
-    # 실제 sanitize_filename 이 title 을 그대로 두므로 파일명 일치 확인을 위해
-    # make_filepath 로 기대 경로 계산 후 touch.
-    from src.downloader.video_downloader import make_filepath
-
-    rel = make_filepath(course.long_name, lec.week_label, lec.title)
-    full = (tmp_path / rel).resolve()
-    _touch(full)
-    _touch(full.with_suffix(".mp3"))
+    # expected_paths SoT 로 정확한 경로에 파일 생성
+    mp4, mp3 = expected_paths(tmp_path, course, lec)
+    _touch(mp4)
+    _touch(mp3)
 
     missing = list_missing_items(
         [course], [detail], download_dir=str(tmp_path), rule="both",
@@ -153,12 +145,9 @@ def test_list_missing_force_drift_includes_fs_present(tmp_path: Path):
     detail = _make_detail([lec])
 
     # 파일 생성 → 기본 모드에선 missing 아님
-    from src.downloader.video_downloader import make_filepath
-
-    rel = make_filepath(course.long_name, lec.week_label, lec.title)
-    full = (tmp_path / rel).resolve()
-    _touch(full)
-    _touch(full.with_suffix(".mp3"))
+    mp4, mp3 = expected_paths(tmp_path, course, lec)
+    _touch(mp4)
+    _touch(mp3)
 
     # store 에는 실패 기록
     store = ProgressStore(path=tmp_path / "progress.json")
@@ -209,12 +198,9 @@ def test_reconcile_confirms_when_file_exists_but_store_failed(tmp_path: Path):
     lec = _make_lec("3316344")
     detail = _make_detail([lec])
 
-    from src.downloader.video_downloader import make_filepath
-
-    rel = make_filepath(course.long_name, lec.week_label, lec.title)
-    full = (tmp_path / rel).resolve()
-    _touch(full)
-    _touch(full.with_suffix(".mp3"))
+    mp4, mp3 = expected_paths(tmp_path, course, lec)
+    _touch(mp4)
+    _touch(mp3)
 
     store = ProgressStore(path=tmp_path / "progress.json")
     store.mark_played(lec.full_url)
@@ -247,12 +233,9 @@ def test_reconcile_confirms_when_lms_marks_incomplete(tmp_path: Path):
     lec = _make_lec("3316344", completion="incomplete")
     detail = _make_detail([lec])
 
-    from src.downloader.video_downloader import make_filepath
-
-    rel = make_filepath(course.long_name, lec.week_label, lec.title)
-    full = (tmp_path / rel).resolve()
-    _touch(full)
-    _touch(full.with_suffix(".mp3"))
+    mp4, mp3 = expected_paths(tmp_path, course, lec)
+    _touch(mp4)
+    _touch(mp3)
 
     store = ProgressStore(path=tmp_path / "progress.json")
     store.mark_played(lec.full_url)
@@ -276,12 +259,9 @@ def test_reconcile_no_op_when_store_already_correct(tmp_path: Path):
     lec = _make_lec("3316344")
     detail = _make_detail([lec])
 
-    from src.downloader.video_downloader import make_filepath
-
-    rel = make_filepath(course.long_name, lec.week_label, lec.title)
-    full = (tmp_path / rel).resolve()
-    _touch(full)
-    _touch(full.with_suffix(".mp3"))
+    mp4, mp3 = expected_paths(tmp_path, course, lec)
+    _touch(mp4)
+    _touch(mp3)
 
     store = ProgressStore(path=tmp_path / "progress.json")
     store.mark_played(lec.full_url)
