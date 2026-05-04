@@ -320,6 +320,29 @@ async def run_auto_mode(
                     stop_event.set()
                     break
 
+            # ── 과목 목록 갱신 (BUG-1) ─────────────────────────────
+            # 자동 모드 진입 시 한 번만 fetch 한 courses 가 stale 이 되어 학기 도중
+            # LMS 에 추가/제거된 과목이 영구 누락되는 문제를 방지. 매 사이클 cheap
+            # 한 dashboard evaluate 한 번으로 동기화. 실패 시 이전 목록 유지.
+            try:
+                fresh_courses = await scraper.fetch_courses()
+                old_ids = {c.id for c in courses}
+                new_ids = {c.id for c in fresh_courses}
+                if old_ids != new_ids:
+                    added = new_ids - old_ids
+                    removed = old_ids - new_ids
+                    _log.info(
+                        "과목 목록 변경 감지 — 추가:%s 제거:%s", added or "{}", removed or "{}",
+                    )
+                    if added or removed:
+                        console.print(
+                            f"  [dim]과목 목록 변경 — 추가 {len(added)} / 제거 {len(removed)}[/dim]"
+                        )
+                    courses[:] = fresh_courses  # in-place mutation — 호출자 reference 보존
+            except Exception as e:
+                _log.warning("과목 목록 갱신 실패 (이전 목록 유지): %s", e)
+                # courses 갱신 실패는 fatal 이 아님 — fetch_all_details 에서 재시도
+
             # 강의 목록 새로고침
             try:
                 details = await _reload_details(scraper, courses)
@@ -396,7 +419,18 @@ async def run_auto_mode(
                 store.mark_incomplete(url)
 
             # ── 정리: 현재 LMS에 존재하는 URL만 유지 ───────────────
-            orphan_count = store.retain_only(all_urls)
+            # BUG-2: details 부분 실패 시 retain_only 보류. 일시적 fetch 실패로
+            # 그 과목 강의 URL 이 all_urls 에 빠져 store 가 catastrophic 삭제되는 것을
+            # 방지. 다음 사이클에 fetch 성공하면 store 가 보존된 상태로 정상 진행.
+            none_detail_count = sum(1 for d in details if d is None)
+            if none_detail_count > 0:
+                _log.warning(
+                    "details 부분 실패 (%d/%d) — retain_only 보류 (store 보존)",
+                    none_detail_count, len(details),
+                )
+                orphan_count = 0
+            else:
+                orphan_count = store.retain_only(all_urls)
 
             _save_store(store)
             if still_incomplete_urls:

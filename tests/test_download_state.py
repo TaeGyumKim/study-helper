@@ -233,6 +233,43 @@ def test_reconcile_confirms_when_file_exists_but_store_failed(tmp_path: Path):
     assert entry.reason is None
 
 
+def test_reconcile_confirms_when_lms_marks_incomplete(tmp_path: Path):
+    """BUG-4 회귀 방지: LMS 가 일시적으로 incomplete 표시이지만 fs 에 파일이
+    실재한다면 reconcile 이 store.downloaded 를 정정한다.
+
+    이전에는 `if lec.completion != "completed": continue` 가드 때문에 LMS
+    incomplete 강의는 건너뛰었고, 결과적으로 store 의 downloaded=False 가
+    매 사이클 그대로 남아 동일 파일을 무한 재다운로드 시도하는 catastrophic
+    loop 가 발생했다 (디스크 96 mp4 vs store 83 downloaded 의 13건 drift).
+    """
+    course = _make_course()
+    # LMS 가 일시적으로 incomplete 표시
+    lec = _make_lec("3316344", completion="incomplete")
+    detail = _make_detail([lec])
+
+    from src.downloader.video_downloader import make_filepath
+
+    rel = make_filepath(course.long_name, lec.week_label, lec.title)
+    full = (tmp_path / rel).resolve()
+    _touch(full)
+    _touch(full.with_suffix(".mp3"))
+
+    store = ProgressStore(path=tmp_path / "progress.json")
+    store.mark_played(lec.full_url)
+    store.mark_download_failed(lec.full_url, reason="network")
+
+    unsupported, confirmed = reconcile_store_with_filesystem(
+        [course], [detail], store,
+        download_dir=str(tmp_path), rule="both",
+    )
+    assert unsupported == 0
+    assert confirmed == 1
+
+    entry = store.get(lec.full_url)
+    assert entry.downloaded is True
+    assert entry.reason is None
+
+
 def test_reconcile_no_op_when_store_already_correct(tmp_path: Path):
     """이미 downloaded=True 상태면 reconcile 은 중복 호출하지 않는다."""
     course = _make_course()

@@ -205,7 +205,14 @@ class ProgressStore:
         return self.entries.pop(url, None) is not None
 
     def retain_only(self, allowed_urls: set[str]) -> int:
-        """LMS에서 사라진 항목을 제거한다. 반환값은 제거된 개수."""
+        """LMS에서 사라진 항목을 제거한다. 반환값은 제거된 개수.
+
+        BUG-2 안전망: 빈 set 으로 호출되면 모든 entry 가 제거되는 catastrophic
+        삭제가 발생하므로 0 을 반환하고 skip. 호출자가 fetch 부분 실패 가드를
+        거치는 것이 1차 방어선이고, 본 가드는 호출자 회귀에 대한 2차 방어.
+        """
+        if not allowed_urls:
+            return 0
         orphan = self.known_urls() - allowed_urls
         for url in orphan:
             del self.entries[url]

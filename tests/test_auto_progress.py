@@ -129,6 +129,22 @@ def test_retain_only_removes_orphans(tmp_path: Path):
     assert set(store.entries.keys()) == {"keep1", "keep2"}
 
 
+def test_retain_only_empty_set_is_safe(tmp_path: Path):
+    """BUG-2 안전망: 빈 set 으로 호출되면 catastrophic delete 대신 0 반환.
+
+    호출자(auto.py)가 fetch 부분 실패 가드를 거치는 것이 1차 방어선이지만,
+    회귀로 빈 set 이 흘러들어와도 store 가 통째로 비워지지 않게 한다.
+    """
+    store = _new_store(tmp_path)
+    for url in ("a", "b", "c"):
+        store.mark_played(url)
+        store.mark_download_success(url)
+
+    removed = store.retain_only(set())
+    assert removed == 0
+    assert set(store.entries.keys()) == {"a", "b", "c"}
+
+
 def test_mark_incomplete_resets_played(tmp_path: Path):
     """LMS가 항목을 다시 미완료로 바꾸면 played=False 및 downloaded=None 복귀."""
     store = _new_store(tmp_path)
