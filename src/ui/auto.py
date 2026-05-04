@@ -315,6 +315,7 @@ async def run_auto_mode(
             # 사이클 처리 통계 (종료 로그용)
             cycle_full_done = 0
             cycle_full_failed = 0
+            cycle_browser_aborted = 0  # driver crash 로 abort — 강의 결함 아님
             cycle_dl_done = 0
             cycle_dl_failed = 0
             cycle_quarantined = 0
@@ -334,6 +335,7 @@ async def run_auto_mode(
             # 자동 모드 진입 시 한 번만 fetch 한 courses 가 stale 이 되어 학기 도중
             # LMS 에 추가/제거된 과목이 영구 누락되는 문제를 방지. 매 사이클 cheap
             # 한 dashboard evaluate 한 번으로 동기화. 실패 시 이전 목록 유지.
+            courses_dropped = 0  # PROBLEM-B: retain_only 가드 신호
             try:
                 fresh_courses = await scraper.fetch_courses()
                 old_ids = {c.id for c in courses}
@@ -341,6 +343,7 @@ async def run_auto_mode(
                 if old_ids != new_ids:
                     added = new_ids - old_ids
                     removed = old_ids - new_ids
+                    courses_dropped = len(removed)
                     # SEC-NEW-001: course id set 자체는 PII 가 아니지만 LMS 내부 식별자
                     # 노출이라 _log.debug 로 격하. 변경 사실(개수)은 _log.info 로 분리.
                     _log.info(
@@ -440,14 +443,17 @@ async def run_auto_mode(
                 store.mark_incomplete(url)
 
             # ── 정리: 현재 LMS에 존재하는 URL만 유지 ───────────────
-            # BUG-2: details 부분 실패 시 retain_only 보류. 일시적 fetch 실패로
-            # 그 과목 강의 URL 이 all_urls 에 빠져 store 가 catastrophic 삭제되는 것을
-            # 방지. 다음 사이클에 fetch 성공하면 store 가 보존된 상태로 정상 진행.
+            # BUG-2 / PROBLEM-B: 다음 두 케이스에서 retain_only 보류.
+            #   1) details 부분 실패 (fetch_all_details 의 일부 None) — 그 과목
+            #      강의 URL 이 all_urls 에 빠져 store 가 catastrophic 삭제되는 것 방지
+            #   2) courses 자체에서 1개 이상 사라짐 — LMS 일시 응답 누락 시
+            #      해당 과목 강의가 통째로 store 에서 삭제되는 것 방지
+            # 다음 사이클에 fetch 성공하면 store 가 보존된 상태로 정상 진행.
             none_detail_count = sum(1 for d in details if d is None)
-            if none_detail_count > 0:
+            if none_detail_count > 0 or courses_dropped > 0:
                 _log.warning(
-                    "details 부분 실패 (%d/%d) — retain_only 보류 (store 보존)",
-                    none_detail_count, len(details),
+                    "fetch 부분 실패 (courses 누락 %d / details None %d/%d) — retain_only 보류",
+                    courses_dropped, none_detail_count, len(details),
                 )
                 orphan_count = 0
             else:
@@ -499,9 +505,12 @@ async def run_auto_mode(
                         )
                         _tg_quarantine_notify(course, lec)
 
-                # 통계 카운트
+                # 통계 카운트 — BROWSER_RESTARTED 는 강의 자체 결함이 아니므로
+                # cycle_full_failed 와 별도로 카운트해 통계 노이즈를 분리.
                 if result.played and (result.downloaded or not result.downloadable):
                     cycle_full_done += 1
+                elif result.reason == REASON_BROWSER_RESTARTED:
+                    cycle_browser_aborted += 1
                 else:
                     cycle_full_failed += 1
 
@@ -536,9 +545,9 @@ async def run_auto_mode(
             cycle_elapsed = (datetime.now(KST) - cycle_started_at).total_seconds()
             _log.info(
                 "스케줄 체크 종료 (cycle %d, %.1fs): full_done=%d full_fail=%d "
-                "dl_done=%d dl_fail=%d quarantined=%d missing=%d",
+                "browser_aborted=%d dl_done=%d dl_fail=%d quarantined=%d missing=%d",
                 cycle_count, cycle_elapsed,
-                cycle_full_done, cycle_full_failed,
+                cycle_full_done, cycle_full_failed, cycle_browser_aborted,
                 cycle_dl_done, cycle_dl_failed,
                 cycle_quarantined, len(missing_entries),
             )

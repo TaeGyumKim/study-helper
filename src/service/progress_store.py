@@ -165,8 +165,16 @@ class ProgressStore:
         return datetime.now(KST).isoformat(timespec="seconds")
 
     def mark_played(self, url: str) -> None:
+        """재생(출석) 성공 기록.
+
+        PROBLEM-A 수정: 정상 재생 성공 시 누적 실패 카운터를 0 으로 reset.
+        이전에는 카운터가 단조 증가만 해서 LMS 일시 토글 + 일시 driver crash 가
+        반복되면 정상 강의도 false-positive 격리될 위험이 있었다 ("일시적 실패"와
+        "지속적 실패" 구분 불가). 재생 성공이라는 명확한 신호에서 reset.
+        """
         e = self.entries.setdefault(url, ProgressEntry())
         e.played = True
+        e.play_fail_count = 0
         e.ts = self._now()
 
     def mark_incomplete(self, url: str) -> None:
