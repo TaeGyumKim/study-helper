@@ -163,3 +163,77 @@ def test_save_atomic_no_tmp_remains(tmp_path: Path):
     tmp_file = store.path.with_suffix(store.path.suffix + ".tmp")
     assert not tmp_file.exists()
     assert store.path.exists()
+
+
+# ── BUG-5: 누적 재생 실패 격리 ────────────────────────────────
+
+
+def test_mark_play_failed_increments_counter(tmp_path: Path):
+    """재생 실패 호출마다 카운터가 1씩 증가하고 격리되지 않는다."""
+    store = _new_store(tmp_path)
+    url = "u-quarantine"
+    for i in range(1, 5):
+        quarantined = store.mark_play_failed(url, threshold=5)
+        assert quarantined is False
+        assert store.get(url).play_fail_count == i
+
+
+def test_mark_play_failed_quarantines_at_threshold(tmp_path: Path):
+    """누적 재생 실패가 임계에 도달하면 격리된다 (downloadable=False, reason=play_quarantined)."""
+    from src.downloader.result import REASON_PLAY_QUARANTINED
+
+    store = _new_store(tmp_path)
+    url = "u-q"
+    for _ in range(4):
+        store.mark_play_failed(url, threshold=5)
+
+    quarantined = store.mark_play_failed(url, threshold=5)
+    assert quarantined is True
+    entry = store.get(url)
+    assert entry.played is True
+    assert entry.downloadable is False
+    assert entry.downloaded is False
+    assert entry.reason == REASON_PLAY_QUARANTINED
+
+
+def test_mark_play_failed_no_double_quarantine(tmp_path: Path):
+    """이미 격리된 강의는 재호출되어도 다시 격리 트리거하지 않는다 (알림 중복 방지)."""
+    store = _new_store(tmp_path)
+    url = "u-q"
+    for _ in range(5):
+        store.mark_play_failed(url, threshold=5)
+    again = store.mark_play_failed(url, threshold=5)
+    assert again is False
+
+
+def test_load_v2_handles_missing_play_fail_count(tmp_path: Path):
+    """기존 v2 데이터에 play_fail_count 필드가 없어도 0 으로 안전하게 로드된다."""
+    store = _new_store(tmp_path)
+    legacy_v2 = {
+        "version": 2,
+        "entries": {
+            "u1": {
+                "played": True, "downloaded": True, "downloadable": True,
+                "reason": None, "ts": "2026-04-01T00:00:00+09:00",
+            },
+        },
+    }
+    store.path.write_text(json.dumps(legacy_v2), encoding="utf-8")
+    store.load()
+    assert store.get("u1").play_fail_count == 0
+
+
+def test_load_v2_handles_corrupted_play_fail_count(tmp_path: Path):
+    """play_fail_count 가 비정상 값이어도 0 으로 fallback."""
+    store = _new_store(tmp_path)
+    legacy_v2 = {
+        "version": 2,
+        "entries": {
+            "u1": {"played": True, "ts": "", "play_fail_count": "not-a-number"},
+            "u2": {"played": True, "ts": "", "play_fail_count": None},
+        },
+    }
+    store.path.write_text(json.dumps(legacy_v2), encoding="utf-8")
+    store.load()
+    assert store.get("u1").play_fail_count == 0
+    assert store.get("u2").play_fail_count == 0

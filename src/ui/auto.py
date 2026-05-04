@@ -17,6 +17,7 @@ from rich.prompt import Prompt
 from src.config import KST, Config, get_data_path
 from src.downloader.paths import file_present
 from src.downloader.result import (
+    REASON_BROWSER_RESTARTED,
     REASON_PLAY_FAILED,
     REASON_STOPPED,
     REASON_UNKNOWN,
@@ -304,10 +305,17 @@ async def run_auto_mode(
 
             console.print()
             cycle_count += 1
-            now_str = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")
+            cycle_started_at = datetime.now(KST)
+            now_str = cycle_started_at.strftime("%Y-%m-%d %H:%M:%S")
             _log.info("스케줄 체크 시작 (cycle %d)", cycle_count)
             console.print(f"  [bold cyan][{now_str}] 스케줄 체크 시작[/bold cyan]")
             console.print()
+            # 사이클 처리 통계 (종료 로그용)
+            cycle_full_done = 0
+            cycle_full_failed = 0
+            cycle_dl_done = 0
+            cycle_dl_failed = 0
+            cycle_quarantined = 0
 
             # 브라우저 메모리 누적 방지: N사이클마다 재시작
             if cycle_count > 1 and cycle_count % _BROWSER_RESTART_INTERVAL == 0:
@@ -388,8 +396,15 @@ async def run_auto_mode(
                     is_unsupported = not lec.is_downloadable
 
                     if lec.needs_watch:
+                        # BUG-5 격리: 누적 재생 실패가 임계 초과한 강의는 LMS 가
+                        # incomplete 로 보더라도 더 이상 재생 큐에 넣지 않는다.
+                        from src.downloader.result import REASON_PLAY_QUARANTINED
+
+                        existing = store.get(lec.full_url)
+                        if existing and existing.reason == REASON_PLAY_QUARANTINED:
+                            continue
                         # LMS 기준 아직 완료 안 된 것 → 풀 파이프라인 (store에 성공 기록이 있더라도 재시도)
-                        if store.get(lec.full_url) and store.is_fully_done(lec.full_url):
+                        if existing and store.is_fully_done(lec.full_url):
                             still_incomplete_urls.add(lec.full_url)
                         full_pending.append((course, lec))
                         continue
@@ -464,6 +479,26 @@ async def run_auto_mode(
                     break
                 result = await _process_lecture(scraper, course, lec, stop_event)
                 _apply_play_result(store, lec.full_url, result)
+
+                # BUG-5: 재생 실패 누적 → 임계 초과 시 격리 + 텔레그램 1 회 알림.
+                # REASON_BROWSER_RESTARTED 는 driver crash 로 인한 abort 이므로
+                # 강의 자체의 결함이 아니다 — 카운터 증가 시키지 않는다.
+                if not result.played and result.reason == REASON_PLAY_FAILED:
+                    quarantined = store.mark_play_failed(lec.full_url)
+                    if quarantined:
+                        cycle_quarantined += 1
+                        _log.warning(
+                            "강의 격리: 누적 재생 실패 임계 초과 — [%s] %s",
+                            course.long_name, lec.title,
+                        )
+                        _tg_quarantine_notify(course, lec)
+
+                # 통계 카운트
+                if result.played and (result.downloaded or not result.downloadable):
+                    cycle_full_done += 1
+                else:
+                    cycle_full_failed += 1
+
                 _save_store(store)
 
             # ── 2단계: 재생 스킵 + 다운로드만 재시도 ────────────────
@@ -472,6 +507,12 @@ async def run_auto_mode(
                     break
                 result = await _process_download_only(scraper, course, lec)
                 _apply_play_result(store, lec.full_url, result)
+
+                if result.downloaded:
+                    cycle_dl_done += 1
+                else:
+                    cycle_dl_failed += 1
+
                 _save_store(store)
 
             # ── 다운로드 누락 점검 (파일시스템 기준 재검증, CQS 분리) ─────
@@ -484,6 +525,17 @@ async def run_auto_mode(
             from src.stt.transcriber import safe_unload
 
             safe_unload()
+
+            # ── 사이클 종료 로그 (BUG-8) ────────────────────────────
+            cycle_elapsed = (datetime.now(KST) - cycle_started_at).total_seconds()
+            _log.info(
+                "스케줄 체크 종료 (cycle %d, %.1fs): full_done=%d full_fail=%d "
+                "dl_done=%d dl_fail=%d quarantined=%d missing=%d",
+                cycle_count, cycle_elapsed,
+                cycle_full_done, cycle_full_failed,
+                cycle_dl_done, cycle_dl_failed,
+                cycle_quarantined, len(missing_entries),
+            )
 
             console.print()
             console.print("  [bold green]이번 스케줄 처리 완료.[/bold green]")
@@ -566,8 +618,13 @@ async def _process_lecture(
             last_err_msg = f"재생 실패: {exc_type}"
             _log.error("재생 예외 (%d/%d): %s — %s", play_attempt, _MAX_PLAY_RETRIES, label, e, exc_info=True)
             console.print(f"  [red]  → {last_err_msg} ({play_attempt}/{_MAX_PLAY_RETRIES})[/red]")
-            # B3: 브라우저가 죽은 경우 재시작 후 다음 attempt로 자연스럽게 진행
-            await _recover_if_browser_dead(scraper, e, label)
+            # BUG-6: 브라우저가 죽은 경우 재시작 후 같은 강의를 retry 하지 않고
+            # 즉시 다음 강의로 넘어간다. 재시작 직후의 driver 가 같은 강의 재생에서
+            # 또 죽으면 사이클 시간이 폭증하므로 (실측: 한 강의 4 분+) 다음 사이클에
+            # 자연스럽게 재시도되도록 위임. mark_play_failed 카운터도 증가하지 않음.
+            if await _recover_if_browser_dead(scraper, e, label):
+                _log.info("브라우저 재시작으로 인해 강의 처리 abort: %s", label)
+                return PlayResult(played=False, reason=REASON_BROWSER_RESTARTED)
 
     if not play_success:
         _log.warning("재생 최종 실패: %s — %s", label, last_err_msg)
@@ -669,8 +726,13 @@ async def _run_download_step(
                 "다운로드 예외 (%d/%d): %s — %s", attempt, _MAX_DOWNLOAD_RETRIES, label, e, exc_info=True,
             )
             console.print(f"  [red]  → 다운로드 실패: {exc_type} ({attempt}/{_MAX_DOWNLOAD_RETRIES})[/red]")
-            # 브라우저 죽음 감지 시 재시작 — 다음 attempt에 정상 페이지 사용
-            await _recover_if_browser_dead(scraper, e, label)
+            # BUG-6: 브라우저 죽음 감지 시 재시작 후 같은 강의 retry 하지 않고
+            # 즉시 다음 강의로 abort. 다음 사이클에 자연스럽게 재시도.
+            if await _recover_if_browser_dead(scraper, e, label):
+                _log.info("브라우저 재시작으로 인해 다운로드 abort: %s", label)
+                return DownloadStepResult(
+                    ok=False, reason=REASON_BROWSER_RESTARTED, downloadable=True,
+                )
             continue
 
         if result.ok:
@@ -792,4 +854,16 @@ def _tg_error_notify(course: "Course", lec: "LectureItem", error_msg: str) -> No
         week_label=lec.week_label,
         lecture_title=lec.title,
         error_msg=error_msg,
+    )
+
+
+def _tg_quarantine_notify(course: "Course", lec: "LectureItem") -> None:
+    """BUG-5: 누적 재생 실패 임계 초과로 강의가 격리됐음을 알린다.
+
+    notify_auto_error 를 재사용 — 별도 알림 함수를 추가하지 않아 의존성을
+    최소화한다. 사용자 화면에는 격리 사실 + 강의 정보만 전달.
+    """
+    _tg_error_notify(
+        course, lec,
+        "누적 재생 실패 임계 초과 — 자동 모드에서 격리되었습니다. LMS 측 강의 상태를 확인해 주세요.",
     )

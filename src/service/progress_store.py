@@ -14,7 +14,8 @@ v2 (current):
                 "downloaded": bool | null, # 파일 다운로드 완료 여부 (null=미확인)
                 "downloadable": bool | null, # 구조적 다운로드 가능 여부 (learningx→false)
                 "reason": str | null,      # 실패 사유 (Phase 1 reason 상수)
-                "ts": str                  # 마지막 업데이트 ISO-8601
+                "ts": str,                 # 마지막 업데이트 ISO-8601
+                "play_fail_count": int     # 누적 재생 실패 횟수 (BUG-5 격리 임계 측정)
             },
             ...
         }
@@ -44,6 +45,15 @@ class ProgressEntry:
     downloadable: bool | None = None
     reason: str | None = None
     ts: str = ""
+    # BUG-5: 누적 재생 실패 카운터. 임계 초과 시 영구 격리 (mark_play_failed 참조).
+    # 기존 v2 데이터에 필드가 없어도 0 으로 안전하게 로드된다.
+    play_fail_count: int = 0
+
+
+# BUG-5: 누적 재생 실패 임계. 초과하면 영구 격리되어 다음 사이클부터 큐에 들어가지
+# 않는다. 텔레그램 알림은 격리되는 시점에 1 회 발송. 임계는 보수적으로 잡아
+# 일시적 driver crash 등에 의한 false-positive 격리를 방지.
+PLAY_FAIL_QUARANTINE_THRESHOLD = 5
 
 
 @dataclass
@@ -80,6 +90,12 @@ class ProgressStore:
         if isinstance(raw, dict) and raw.get("version") == 2:
             entries_raw = raw.get("entries", {})
             if isinstance(entries_raw, dict):
+                def _to_int(v) -> int:
+                    try:
+                        return int(v) if v is not None else 0
+                    except (TypeError, ValueError):
+                        return 0
+
                 self.entries = {
                     url: ProgressEntry(
                         played=bool(data.get("played", False)),
@@ -87,6 +103,7 @@ class ProgressStore:
                         downloadable=data.get("downloadable"),
                         reason=data.get("reason"),
                         ts=str(data.get("ts", "")),
+                        play_fail_count=_to_int(data.get("play_fail_count", 0)),
                     )
                     for url, data in entries_raw.items()
                     if isinstance(url, str) and isinstance(data, dict)
@@ -171,6 +188,40 @@ class ProgressStore:
         e.downloaded = False
         e.reason = reason
         e.ts = self._now()
+
+    def mark_play_failed(
+        self, url: str, threshold: int = PLAY_FAIL_QUARANTINE_THRESHOLD,
+    ) -> bool:
+        """재생 시도 실패를 기록하고 누적 임계 초과 시 격리한다 (BUG-5).
+
+        호출 흐름:
+            - `_process_lecture` 가 재생 3회 재시도 모두 실패 (PlayResult(played=False,
+              reason=REASON_PLAY_FAILED)) 한 강의에 대해 호출
+            - 누적 카운터 증가 → 임계 도달 시 mark_unsupported 로 격리
+            - 격리되면 True 반환 → 호출자가 텔레그램 알림 1 회 발송 가능
+
+        threshold: 격리 임계 (기본 5). 일시적 driver crash 등으로 인한
+            false-positive 격리를 막기 위해 보수적으로 잡는다.
+
+        Returns:
+            True  — 이번 호출로 격리됨 (호출자 알림 트리거)
+            False — 아직 임계 미달 (다음 사이클 재시도 대상)
+        """
+        e = self.entries.setdefault(url, ProgressEntry())
+        e.play_fail_count += 1
+        e.ts = self._now()
+
+        if e.play_fail_count >= threshold and e.downloadable is not False:
+            # 격리 — 더 이상 재생 큐에 넣지 않음. mark_unsupported 가 played=True 로
+            # 설정해 is_fully_done=True 가 되어 자동 모드 루프에서 자연스럽게 빠진다.
+            from src.downloader.result import REASON_PLAY_QUARANTINED
+
+            e.played = True
+            e.downloadable = False
+            e.downloaded = False
+            e.reason = REASON_PLAY_QUARANTINED
+            return True
+        return False
 
     def mark_download_success(self, url: str) -> None:
         e = self.entries.setdefault(url, ProgressEntry())

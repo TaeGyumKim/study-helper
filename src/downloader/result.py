@@ -31,6 +31,8 @@ REASON_URL_EXTRACT_EXCEPTION = "url_extract_exception"         # goto/navigation
 
 # ── 재생/파이프라인 사유 (PlayResult 전용) ──────────────
 REASON_PLAY_FAILED = "play_failed"                # 3회 재시도 후 재생 실패
+REASON_PLAY_QUARANTINED = "play_quarantined"      # 누적 재생 실패가 임계 초과 — 영구 격리
+REASON_BROWSER_RESTARTED = "browser_restarted"    # 강의 처리 중 browser death 감지 → 다음 사이클로 위임
 REASON_STOPPED = "stopped"                        # 사용자 중단 신호
 
 # ── 재시도 정책 중앙집중 ───────────────────────────────────
